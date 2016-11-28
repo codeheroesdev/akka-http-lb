@@ -1,0 +1,8 @@
+language: scala
+scala:
+  - 2.11.8
+  - 2.10.4
+jdk:
+  - oraclejdk7
+
+script: sbt ++$TRAVIS_SCALA_VERSION check-gen-type-classes test
