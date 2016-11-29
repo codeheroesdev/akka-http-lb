@@ -5,7 +5,8 @@ object Dependencies {
   val akkaDependencies = Seq(
     "com.typesafe.akka" %% "akka-actor" % akkaVersion,
     "com.typesafe.akka" %% "akka-stream" % akkaVersion,
-    "com.typesafe.akka" %% "akka-http-core" % akkaHttpVersion
+    "com.typesafe.akka" %% "akka-http-core" % akkaHttpVersion,
+    "org.scalatest" %% "scalatest" % "2.2.6" % "test"
   )
 
   val additionalResolvers = Seq(

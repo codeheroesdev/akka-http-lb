@@ -11,5 +11,6 @@ final case class EndpointDown(endpoint: Endpoint) extends EndpointEvent
 
 case object NoEndpointsAvailableException extends Exception
 case object BufferOverflowException extends Exception
+case object RequestsQueueClosed extends Exception
 
-case class LoadbalancerSettings(connectionsPerEndpoint: Int, requestsBufferSize: Int)
+case class LoadbalancerSettings(connectionsPerEndpoint: Int, maxEndpointFailures: Int)
