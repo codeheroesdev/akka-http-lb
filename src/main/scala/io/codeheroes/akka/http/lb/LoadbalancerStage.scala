@@ -51,44 +51,43 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
       connectionSlotId
     }
 
-    def handleNewEndpoint(endpoint: Endpoint) = if (!endpoints.contains(endpoint)) {
-      endpoints += (endpoint -> 0)
-      ensureEndpointSlots(endpoint)
+    def handleNewEndpoint(endpoint: Endpoint) =
+      if (!endpoints.contains(endpoint)) {
+        endpoints += (endpoint -> 0)
+        tryHandleRequest(tryEnsureSlots = true)
+      }
+
+    def ensureSlots(): Unit = {
+      endpoints
+        .find { case (_, count) => count < settings.connectionsPerEndpoint }
+        .foreach { case (endpoint, currentCount) =>
+          slots.enqueue(new EndpointSlot(endpoint, nextConnectionSlotId()))
+          endpoints(endpoint) = currentCount + 1
+        }
+
+      tryHandleRequest(tryEnsureSlots = false)
     }
 
-    def ensureEndpointSlots(endpoint: Endpoint) =
-      endpoints
-        .get(endpoint)
-        .map(settings.connectionsPerEndpoint - _)
-        .map(lackedSlots => Vector.fill(lackedSlots)(new EndpointSlot(endpoint, nextConnectionSlotId())))
-        .foreach(newSlots => {
-          newSlots.foreach(slots.enqueue(_))
-          endpoints(endpoint) = endpoints(endpoint) + newSlots.size
-        })
-
-    def tryHandleRequest() =
+    def tryHandleRequest(tryEnsureSlots: Boolean) =
       if (endpoints.isEmpty && isAvailable(requestsIn) && isAvailable(responsesOut)) {
         val (_, result) = grab(requestsIn)
         push(responsesOut, (Failure(NoEndpointsAvailableException), result))
         pull(requestsIn)
       } else if (isAvailable(requestsIn)) {
-        slots
-          .dequeueFirst(_.isReadyToHandle)
-          .foreach(slot => {
+        slots.dequeueFirst(_.isReadyToHandle) match {
+          case Some(slot) =>
             slot.handleRequest(grab(requestsIn))
             slots.enqueue(slot)
             pull(requestsIn)
-          })
+
+          case None => if (tryEnsureSlots) ensureSlots()
+        }
       }
 
     def tryHandleResponse(slot: EndpointSlot) =
       if (isAvailable(responsesOut)) {
         push(responsesOut, slot.getResponse)
       }
-
-    def slotCompleted(slot: EndpointSlot) = {
-      slots.dequeueAll(_.id == slot.id).foreach(_.completeSlot())
-    }
 
     def slotFailed(slot: EndpointSlot, cause: Throwable) = {
       val slotEndpoint = slot.endpoint
@@ -101,14 +100,19 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
         log.error(cause, s"Dropping $slotEndpoint, failed $totalFailure times")
         dropEndpoint(slotEndpoint, Some(cause))
       } else {
-        slots.dequeueAll(_.id == slot.id).foreach(_.completeSlot(Some(cause)))
+        removeSlot(slot, Some(cause))
       }
     }
 
     def dropEndpoint(endpoint: Endpoint, cause: Option[Throwable] = None) = {
-      slots.dequeueAll(_.endpoint == endpoint).foreach(_.completeSlot(cause))
       endpoints.remove(endpoint)
       endpointsFailures.remove(endpoint)
+      slots.dequeueAll(_.endpoint == endpoint).foreach(_.completeSlot(cause))
+    }
+
+    def removeSlot(slot: EndpointSlot, cause: Option[Throwable]) = {
+      endpoints(slot.endpoint) = endpoints(slot.endpoint) - 1
+      slots.dequeueAll(_.id == slot.id).foreach(_.completeSlot(cause))
     }
 
     class EndpointSlot(val endpoint: Endpoint, val id: Int) {
@@ -124,15 +128,15 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
       slotInlet.setHandler(new InHandler {
         override def onPush(): Unit = tryHandleResponse(slot)
 
-        override def onUpstreamFinish(): Unit = slotCompleted(slot)
+        override def onUpstreamFinish(): Unit = removeSlot(slot, None)
 
         override def onUpstreamFailure(ex: Throwable): Unit = slotFailed(slot, ex)
       })
 
       slotOutlet.setHandler(new OutHandler {
-        override def onPull(): Unit = tryHandleRequest()
+        override def onPull(): Unit = tryHandleRequest(tryEnsureSlots = true)
 
-        override def onDownstreamFinish(): Unit = slotCompleted(slot)
+        override def onDownstreamFinish(): Unit = removeSlot(slot, None)
       })
 
       Source
@@ -173,7 +177,7 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
 
     setHandler(endpointsIn, endpointsHandler)
     setHandler(requestsIn, new InHandler {
-      override def onPush(): Unit = tryHandleRequest()
+      override def onPush(): Unit = tryHandleRequest(tryEnsureSlots = true)
 
       override def onUpstreamFinish(): Unit = completeStage()
 
