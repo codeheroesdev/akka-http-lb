@@ -121,7 +121,6 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
 
       private val slotInlet = new SubSinkInlet[HttpResponse](s"EndpointSlot.[$endpoint].[$id].in")
       private val slotOutlet = new SubSourceOutlet[HttpRequest](s"EndpointSlot.[$endpoint].[$id].out")
-      private val connectionFlow = Http().outgoingConnection(endpoint.host, endpoint.port)
 
       private val inFlight = mutable.Queue.empty[T]
 
@@ -141,7 +140,7 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
 
       Source
         .fromGraph(slotOutlet.source)
-        .via(connectionFlow)
+        .via(settings.connectionBuilder(endpoint))
         .runWith(Sink.fromGraph(slotInlet.sink))(mat)
 
       slotInlet.pull()

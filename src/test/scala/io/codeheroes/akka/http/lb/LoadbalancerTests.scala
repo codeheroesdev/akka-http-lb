@@ -2,7 +2,9 @@ package io.codeheroes.akka.http.lb
 
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 
+import akka.NotUsed
 import akka.actor.ActorSystem
+import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.HttpRequest
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.Source
@@ -23,7 +25,7 @@ class LoadbalancerTests extends FlatSpec with Matchers {
     val mock = new EndpointMock(endpoint)
     val latch = new TestLatch(3)
 
-    val loadbalancer = Loadbalancer.singleRequests(endpointSource)
+    val loadbalancer = Loadbalancer.singleRequests(endpointSource, LoadbalancerSettings.default)
 
     loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
     loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }

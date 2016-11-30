@@ -7,9 +7,7 @@ import akka.stream.scaladsl._
 
 
 object Loadbalancer {
-  val DefaultSettings = LoadbalancerSettings(connectionsPerEndpoint = 32, maxEndpointFailures = 3)
-
-  def flow[T](endpointEventsSource: Source[EndpointEvent, NotUsed], settings: LoadbalancerSettings = DefaultSettings)
+  def flow[T](endpointEventsSource: Source[EndpointEvent, NotUsed], settings: LoadbalancerSettings)
              (implicit system: ActorSystem, mat: ActorMaterializer) =
 
     Flow.fromGraph(GraphDSL.create(endpointEventsSource) { implicit builder =>
@@ -21,7 +19,7 @@ object Loadbalancer {
     })
 
 
-  def singleRequests(endpointEventsSource: Source[EndpointEvent, NotUsed], settings: LoadbalancerSettings = DefaultSettings)
+  def singleRequests(endpointEventsSource: Source[EndpointEvent, NotUsed], settings: LoadbalancerSettings)
                     (implicit system: ActorSystem, mat: ActorMaterializer) =
     new SingleRequestLoadbalancer(endpointEventsSource, settings)
 }
