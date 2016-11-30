@@ -1,7 +1,6 @@
 package io.codeheroes.akka.http.lb
 
 import akka.actor.ActorSystem
-import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.stream._
 import akka.stream.scaladsl.{Sink, Source}
@@ -69,9 +68,10 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
     }
 
     def tryHandleRequest(tryEnsureSlots: Boolean) =
-      if (endpoints.isEmpty && isAvailable(requestsIn) && isAvailable(responsesOut)) {
+      if (endpoints.isEmpty && isAvailable(requestsIn)) {
         val (_, result) = grab(requestsIn)
-        push(responsesOut, (Failure(NoEndpointsAvailableException), result))
+        failedResponses.enqueue((Failure(NoEndpointsAvailableException), result))
+        tryHandleResponseFromFailed()
         pull(requestsIn)
       } else if (isAvailable(requestsIn)) {
         slots.dequeueFirst(_.isReadyToHandle) match {
@@ -84,10 +84,16 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
         }
       }
 
-    def tryHandleResponse(slot: EndpointSlot) =
+    def tryHandleResponseFromSlot(slot: EndpointSlot) =
       if (isAvailable(responsesOut)) {
         push(responsesOut, slot.getResponse)
       }
+
+    def tryHandleResponseFromFailed() =
+      if (isAvailable(responsesOut) && failedResponses.nonEmpty) {
+        push(responsesOut, failedResponses.dequeue())
+      }
+
 
     def slotFailed(slot: EndpointSlot, cause: Throwable) = {
       val slotEndpoint = slot.endpoint
@@ -108,24 +114,26 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
       endpoints.remove(endpoint)
       endpointsFailures.remove(endpoint)
       slots.dequeueAll(_.endpoint == endpoint).foreach(_.completeSlot(cause))
+      tryHandleResponseFromFailed()
+      tryHandleRequest(tryEnsureSlots = true)
     }
 
     def removeSlot(slot: EndpointSlot, cause: Option[Throwable]) = {
       endpoints(slot.endpoint) = endpoints(slot.endpoint) - 1
       slots.dequeueAll(_.id == slot.id).foreach(_.completeSlot(cause))
+      tryHandleResponseFromFailed()
+      tryHandleRequest(tryEnsureSlots = true)
     }
 
     class EndpointSlot(val endpoint: Endpoint, val id: Int) {
       slot =>
-
-
       private val slotInlet = new SubSinkInlet[HttpResponse](s"EndpointSlot.[$endpoint].[$id].in")
       private val slotOutlet = new SubSourceOutlet[HttpRequest](s"EndpointSlot.[$endpoint].[$id].out")
 
       private val inFlight = mutable.Queue.empty[T]
 
       slotInlet.setHandler(new InHandler {
-        override def onPush(): Unit = tryHandleResponse(slot)
+        override def onPush(): Unit = tryHandleResponseFromSlot(slot)
 
         override def onUpstreamFinish(): Unit = removeSlot(slot, None)
 
@@ -135,7 +143,7 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
       slotOutlet.setHandler(new OutHandler {
         override def onPull(): Unit = tryHandleRequest(tryEnsureSlots = true)
 
-        override def onDownstreamFinish(): Unit = removeSlot(slot, None)
+        override def onDownstreamFinish(): Unit = () //Ignored in order to handled upstream failure
       })
 
       Source
@@ -166,11 +174,12 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
           case Some(cause) => new IllegalStateException(s"Failure to process request to $endpoint at slot $id", cause)
           case None => new IllegalStateException(s"Failure to process request to $endpoint at slot $id")
         }
-
         slotInlet.cancel()
         slotOutlet.complete()
 
-        inFlight.dequeueAll(_ => true).foreach(t => failedResponses.enqueue((Failure(ex), t)))
+        inFlight.dequeueAll(_ => true).foreach(t => {
+          failedResponses.enqueue((Failure(ex), t))
+        })
       }
     }
 
@@ -189,13 +198,15 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
         if (failedResponses.nonEmpty) {
           push(responsesOut, failedResponses.dequeue())
         } else {
+
           slots
             .dequeueFirst(_.isReadyToGet)
             .foreach(slot => {
-              tryHandleResponse(slot)
+              tryHandleResponseFromSlot(slot)
               slots.enqueue(slot)
             })
         }
+
 
       override def onDownstreamFinish(): Unit = completeStage()
     })
