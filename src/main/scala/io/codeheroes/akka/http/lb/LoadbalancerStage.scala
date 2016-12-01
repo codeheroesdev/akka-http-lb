@@ -2,11 +2,12 @@ package io.codeheroes.akka.http.lb
 
 import java.util.concurrent.TimeoutException
 
+import akka.Done
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.stream._
 import akka.stream.scaladsl.{Sink, Source}
-import akka.stream.stage.{GraphStage, GraphStageLogic, InHandler, OutHandler}
+import akka.stream.stage._
 
 import scala.collection.mutable
 import scala.util.{Failure, Success, Try}
@@ -20,7 +21,7 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
 
   override def shape = new FanInShape2(endpointsIn, requestsIn, responsesOut)
 
-  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
+  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new TimerGraphStageLogic(shape) {
     private val endpoints: mutable.Map[Endpoint, Int] = mutable.Map.empty
     private val endpointsFailures: mutable.Map[Endpoint, Int] = mutable.Map.empty
     private val slots: mutable.Queue[EndpointSlot] = mutable.Queue.empty
@@ -30,6 +31,7 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
     override def preStart(): Unit = {
       pull(endpointsIn)
       pull(requestsIn)
+      schedulePeriodically(Done, settings.endpointFailuresResetInterval)
     }
 
     val endpointsHandler = new InHandler {
@@ -215,6 +217,9 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
 
       override def onDownstreamFinish(): Unit = completeStage()
     })
+
+
+    override def onTimer(timerKey: Any): Unit = endpointsFailures.clear()
 
   }
 }

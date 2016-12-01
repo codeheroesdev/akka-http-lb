@@ -22,11 +22,13 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
 
   "LoadbalancerStage" should "adapt to endpoint failure" in {
     val latch = new TestLatch(10)
-    val settings = LoadbalancerSettings(2, 10, createConnectionBuilder(5))
+    val settings = LoadbalancerSettings(2, 10, 5 seconds, createConnectionBuilder(5))
 
     val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(latch, settings)
 
     endpointsQueue.offer(EndpointUp(Endpoint("localhost", 9090)))
+    Thread.sleep(100)
+
     requestsQueue.offer((HttpRequest(), 1))
     requestsQueue.offer((HttpRequest(), 2))
     requestsQueue.offer((HttpRequest(), 3))
@@ -59,7 +61,7 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
 
   it should "adopt to endpoint down events" in {
     val responsesLatch = new TestLatch(5)
-    val settings = LoadbalancerSettings(2, 10, createConnectionBuilder(10))
+    val settings = LoadbalancerSettings(2, 10, 5 seconds, createConnectionBuilder(10))
 
     val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(responsesLatch, settings)
 
@@ -113,7 +115,7 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
       }
     }
 
-    val settings = LoadbalancerSettings(1, 0, connectionBuilder)
+    val settings = LoadbalancerSettings(1, 0, 5 seconds, connectionBuilder)
 
     val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(responsesLatch, settings)
 
@@ -148,6 +150,106 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
 
     result should have size 10
 
+  }
+
+
+  it should "not drop endpoint if not enough failures occurs within reset interval" in {
+    val latch = new TestLatch(10)
+    val processedRequest = new AtomicInteger(0)
+
+    val connectionBuilder = (endpoint: Endpoint) => {
+      Flow[HttpRequest].map { case _ =>
+        val processed = processedRequest.incrementAndGet()
+        if (Set(6, 7, 8).contains(processed)) throw new IllegalArgumentException("Failed") else HttpResponse()
+      }
+    }
+    val settings = LoadbalancerSettings(2, 3, 250 millis, connectionBuilder)
+
+    val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(latch, settings)
+
+    endpointsQueue.offer(EndpointUp(Endpoint("localhost", 9090)))
+    Thread.sleep(100)
+
+    requestsQueue.offer((HttpRequest(), 1))
+    requestsQueue.offer((HttpRequest(), 2))
+    requestsQueue.offer((HttpRequest(), 3))
+    requestsQueue.offer((HttpRequest(), 4))
+    requestsQueue.offer((HttpRequest(), 5))
+    requestsQueue.offer((HttpRequest(), 6))
+    requestsQueue.offer((HttpRequest(), 7))
+
+    Thread.sleep(500)
+
+    requestsQueue.offer((HttpRequest(), 8))
+    requestsQueue.offer((HttpRequest(), 9))
+    requestsQueue.offer((HttpRequest(), 10))
+
+
+    latch.await(5 seconds) shouldBe true
+    requestsQueue.complete()
+    val result = convertIntoStatistics(responsesSeq)
+
+
+    result(1) shouldBe true
+    result(2) shouldBe true
+    result(3) shouldBe true
+    result(4) shouldBe true
+    result(5) shouldBe true
+    result(6) shouldBe false
+    result(7) shouldBe false
+    result(8) shouldBe false
+    result(9) shouldBe true
+    result(10) shouldBe true
+
+    result should have size 10
+  }
+
+  it should "drop endpoint if too many failures occurs within reset interval" in {
+    val latch = new TestLatch(10)
+    val processedRequest = new AtomicInteger(0)
+
+    val connectionBuilder = (endpoint: Endpoint) => {
+      Flow[HttpRequest].map { case _ =>
+        val processed = processedRequest.incrementAndGet()
+        if (Set(6, 7, 8).contains(processed)) throw new IllegalArgumentException("Failed") else HttpResponse()
+      }
+    }
+    val settings = LoadbalancerSettings(2, 3, 5 seconds, connectionBuilder)
+
+    val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(latch, settings)
+
+    endpointsQueue.offer(EndpointUp(Endpoint("localhost", 9090)))
+    Thread.sleep(100)
+
+    requestsQueue.offer((HttpRequest(), 1))
+    requestsQueue.offer((HttpRequest(), 2))
+    requestsQueue.offer((HttpRequest(), 3))
+    requestsQueue.offer((HttpRequest(), 4))
+    requestsQueue.offer((HttpRequest(), 5))
+    requestsQueue.offer((HttpRequest(), 6))
+    requestsQueue.offer((HttpRequest(), 7))
+    requestsQueue.offer((HttpRequest(), 8))
+    requestsQueue.offer((HttpRequest(), 9))
+    requestsQueue.offer((HttpRequest(), 10))
+
+
+    latch.await(5 seconds) shouldBe true
+    requestsQueue.complete()
+    val result = convertIntoStatistics(responsesSeq)
+
+
+    result(1) shouldBe true
+    result(2) shouldBe true
+    result(3) shouldBe true
+    result(4) shouldBe true
+    result(5) shouldBe true
+    result(6) shouldBe false
+    result(7) shouldBe false
+    result(8) shouldBe false
+    result(9) shouldBe false
+    result(10) shouldBe false
+
+    result should have size 10
   }
 
   /*Helper methods*/

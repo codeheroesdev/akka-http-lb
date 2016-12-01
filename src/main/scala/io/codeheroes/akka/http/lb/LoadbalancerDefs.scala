@@ -6,6 +6,9 @@ import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.stream.scaladsl.Flow
 
+import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration._
+
 final case class Endpoint(host: String, port: Int)
 
 sealed trait EndpointEvent {
@@ -22,6 +25,7 @@ case object RequestsQueueClosed extends Exception
 case class LoadbalancerSettings(
                                  connectionsPerEndpoint: Int,
                                  maxEndpointFailures: Int,
+                                 endpointFailuresResetInterval: FiniteDuration,
                                  connectionBuilder: (Endpoint) => Flow[HttpRequest, HttpResponse, NotUsed]
                                )
 
@@ -30,6 +34,7 @@ case object LoadbalancerSettings {
     LoadbalancerSettings(
       connectionsPerEndpoint = 32,
       maxEndpointFailures = 8,
+      endpointFailuresResetInterval = 5 seconds,
       (endpoint: Endpoint) => Http().outgoingConnection(endpoint.host, endpoint.port).mapMaterializedValue(_ => NotUsed)
     )
 }
