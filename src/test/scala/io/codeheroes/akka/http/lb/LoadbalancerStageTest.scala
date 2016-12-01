@@ -118,6 +118,8 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
     val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(responsesLatch, settings)
 
     endpointsQueue.offer(EndpointUp(Endpoint("localhost", 9090)))
+    Thread.sleep(100)
+
     requestsQueue.offer((HttpRequest(), 1))
     requestsQueue.offer((HttpRequest(), 2))
     requestsQueue.offer((HttpRequest(), 3))
