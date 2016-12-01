@@ -104,7 +104,7 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
       val totalFailure = endpointsFailures.getOrElse(slotEndpoint, 0) + 1
       endpointsFailures(slotEndpoint) = totalFailure
 
-      log.error(cause, s"Slot ${slot.id} to $slotEndpoint failed")
+      log.warning(s"Slot ${slot.id} to $slotEndpoint failed due to ${cause.getMessage}")
 
       if (endpointsFailures(slotEndpoint) >= settings.maxEndpointFailures) {
         log.error(cause, s"Dropping $slotEndpoint, failed $totalFailure times")
