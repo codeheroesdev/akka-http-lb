@@ -1,5 +1,6 @@
 package io.codeheroes.akka.http.lb
 
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 
 import akka.NotUsed
@@ -63,6 +64,8 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
     val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(responsesLatch, settings)
 
     endpointsQueue.offer(EndpointUp(Endpoint("localhost", 9090)))
+    Thread.sleep(100)
+
     requestsQueue.offer((HttpRequest(), 1))
     requestsQueue.offer((HttpRequest(), 2))
     requestsQueue.offer((HttpRequest(), 3))
@@ -73,6 +76,8 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
     responsesLatch.reset(5)
 
     endpointsQueue.offer(EndpointDown(Endpoint("localhost", 9090)))
+    Thread.sleep(100)
+
     requestsQueue.offer((HttpRequest(), 6))
     requestsQueue.offer((HttpRequest(), 7))
     requestsQueue.offer((HttpRequest(), 8))
@@ -92,6 +97,51 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
     result(7) shouldBe false
     result(8) shouldBe false
     result(9) shouldBe false
+    result(10) shouldBe false
+
+    result should have size 10
+
+  }
+
+  it should "not drop endpoint after Timeout exception" in {
+    val responsesLatch = new TestLatch(10)
+    val connectionBuilder = (endpoint: Endpoint) => {
+      val processedRequest = new AtomicInteger(0)
+      Flow[HttpRequest].map { case _ =>
+        val processed = processedRequest.incrementAndGet()
+        if (processed > 1) throw new TimeoutException() else HttpResponse()
+      }
+    }
+
+    val settings = LoadbalancerSettings(1, 0, connectionBuilder)
+
+    val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(responsesLatch, settings)
+
+    endpointsQueue.offer(EndpointUp(Endpoint("localhost", 9090)))
+    requestsQueue.offer((HttpRequest(), 1))
+    requestsQueue.offer((HttpRequest(), 2))
+    requestsQueue.offer((HttpRequest(), 3))
+    requestsQueue.offer((HttpRequest(), 4))
+    requestsQueue.offer((HttpRequest(), 5))
+    requestsQueue.offer((HttpRequest(), 6))
+    requestsQueue.offer((HttpRequest(), 7))
+    requestsQueue.offer((HttpRequest(), 8))
+    requestsQueue.offer((HttpRequest(), 9))
+    requestsQueue.offer((HttpRequest(), 10))
+
+    responsesLatch.await(5 seconds) shouldBe true
+    requestsQueue.complete()
+    val result = convertIntoStatistics(responsesSeq)
+
+    result(1) shouldBe true
+    result(2) shouldBe false
+    result(3) shouldBe true
+    result(4) shouldBe false
+    result(5) shouldBe true
+    result(6) shouldBe false
+    result(7) shouldBe true
+    result(8) shouldBe false
+    result(9) shouldBe true
     result(10) shouldBe false
 
     result should have size 10

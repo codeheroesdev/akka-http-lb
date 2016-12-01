@@ -1,5 +1,7 @@
 package io.codeheroes.akka.http.lb
 
+import java.util.concurrent.TimeoutException
+
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.stream._
@@ -137,7 +139,10 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
 
         override def onUpstreamFinish(): Unit = removeSlot(slot, None)
 
-        override def onUpstreamFailure(ex: Throwable): Unit = slotFailed(slot, ex)
+        override def onUpstreamFailure(ex: Throwable): Unit = ex match {
+          case t: TimeoutException => removeSlot(slot, Some(t))
+          case other => slotFailed(slot, ex)
+        }
       })
 
       slotOutlet.setHandler(new OutHandler {
@@ -149,7 +154,7 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
       Source
         .fromGraph(slotOutlet.source)
         .via(settings.connectionBuilder(endpoint))
-        .runWith(Sink.fromGraph(slotInlet.sink))(mat)
+        .runWith(Sink.fromGraph(slotInlet.sink))(subFusingMaterializer)
 
       slotInlet.pull()
 
