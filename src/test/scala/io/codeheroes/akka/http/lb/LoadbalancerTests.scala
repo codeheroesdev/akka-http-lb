@@ -1,17 +1,14 @@
 package io.codeheroes.akka.http.lb
 
-import java.util.concurrent.{CountDownLatch, TimeUnit}
-
-import akka.NotUsed
+import akka.Done
 import akka.actor.ActorSystem
-import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.HttpRequest
 import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.Source
-import io.codeheroes.akka.http.lb.core.{TestLatch, EndpointMock}
+import akka.stream.scaladsl.{Sink, Source}
+import io.codeheroes.akka.http.lb.core.{EndpointMock, TestLatch}
 import org.scalatest.{FlatSpec, Matchers}
 
-import scala.concurrent.duration.{Duration, _}
+import scala.concurrent.duration._
 
 class LoadbalancerTests extends FlatSpec with Matchers {
   private implicit val system = ActorSystem()
@@ -35,6 +32,28 @@ class LoadbalancerTests extends FlatSpec with Matchers {
 
     mock.processed() shouldBe 3
     mock.unbind()
+  }
+
+  it should "process all events when using flow" in {
+
+    val endpoint = Endpoint("localhost", 31000)
+    val endpointSource = Source(EndpointUp(endpoint) :: Nil)
+    val mock = new EndpointMock(endpoint)
+    val latch = new TestLatch(1)
+
+    val loadBalancerFlow = Loadbalancer.flow[Done](endpointSource, LoadbalancerSettings.default)
+
+    Source
+      .single((HttpRequest(), Done))
+      .via(loadBalancerFlow)
+      .runWith(Sink.ignore)
+
+    Thread sleep 3000
+
+    latch.await(5 seconds) shouldBe true
+    mock.processed() shouldBe 1
+    mock.unbind()
+
   }
 
 }

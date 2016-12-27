@@ -143,14 +143,14 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
 
         override def onUpstreamFailure(ex: Throwable): Unit = ex match {
           case t: TimeoutException => removeSlot(slot, Some(t))
-          case other => slotFailed(slot, ex)
+          case _ => slotFailed(slot, ex)
         }
       })
 
       slotOutlet.setHandler(new OutHandler {
         override def onPull(): Unit = tryHandleRequest(tryEnsureSlots = true)
 
-        override def onDownstreamFinish(): Unit = () //Ignored in order to handled upstream failure
+        override def onDownstreamFinish(): Unit = () // Ignored in order to handled upstream failure
       })
 
       Source

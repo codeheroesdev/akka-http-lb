@@ -109,7 +109,7 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
     val responsesLatch = new TestLatch(10)
     val connectionBuilder = (endpoint: Endpoint) => {
       val processedRequest = new AtomicInteger(0)
-      Flow[HttpRequest].map { case _ =>
+      Flow[HttpRequest].map { _ =>
         val processed = processedRequest.incrementAndGet()
         if (processed > 1) throw new TimeoutException() else HttpResponse()
       }
@@ -158,7 +158,7 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
     val processedRequest = new AtomicInteger(0)
 
     val connectionBuilder = (endpoint: Endpoint) => {
-      Flow[HttpRequest].map { case _ =>
+      Flow[HttpRequest].map { _ =>
         val processed = processedRequest.incrementAndGet()
         if (Set(6, 7, 8).contains(processed)) throw new IllegalArgumentException("Failed") else HttpResponse()
       }
@@ -209,7 +209,7 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
     val processedRequest = new AtomicInteger(0)
 
     val connectionBuilder = (endpoint: Endpoint) => {
-      Flow[HttpRequest].map { case _ =>
+      Flow[HttpRequest].map { _ =>
         val processed = processedRequest.incrementAndGet()
         if (Set(6, 7, 8).contains(processed)) throw new IllegalArgumentException("Failed") else HttpResponse()
       }
@@ -274,7 +274,7 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
 
   private def createConnectionBuilder(failAfter: Int): (Endpoint) => Flow[HttpRequest, HttpResponse, NotUsed] = {
     val processedRequest = new AtomicInteger(0)
-    (endpoint: Endpoint) => Flow[HttpRequest].map { case _ =>
+    (endpoint: Endpoint) => Flow[HttpRequest].map { _ =>
       val processed = processedRequest.incrementAndGet()
       if (processed > failAfter) throw new IllegalStateException(s"Failed") else HttpResponse()
     }
