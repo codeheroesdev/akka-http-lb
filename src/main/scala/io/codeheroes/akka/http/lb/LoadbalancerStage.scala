@@ -27,6 +27,8 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
     private val slots: mutable.Queue[EndpointSlot] = mutable.Queue.empty
     private val failedResponses: mutable.Queue[(Try[HttpResponse], T)] = mutable.Queue.empty
     private var connectionSlotId = 0
+    private var upstreamFinished = false
+    private var firstRequestBuffer: Option[(HttpRequest, T)] = None
 
     override def preStart(): Unit = {
       pull(endpointsIn)
@@ -72,31 +74,50 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
     }
 
     def tryHandleRequest(tryEnsureSlots: Boolean) =
-      if (endpoints.isEmpty && isAvailable(requestsIn)) {
+      if (endpoints.isEmpty && isAvailable(requestsIn) && !isClosed(requestsIn)) {
         val (_, result) = grab(requestsIn)
         failedResponses.enqueue((Failure(NoEndpointsAvailableException), result))
         tryHandleResponseFromFailed()
         pull(requestsIn)
-      } else if (isAvailable(requestsIn)) {
+      } else if (firstRequestBuffer.nonEmpty) {
+        slots.dequeueFirst(_.isReadyToHandle) match {
+          case Some(slot) =>
+            slot.handleRequest(firstRequestBuffer.get)
+            slots.enqueue(slot)
+            firstRequestBuffer = None
+
+            if (!isClosed(requestsIn)) pull(requestsIn)
+
+          case None =>
+            if (tryEnsureSlots) ensureSlots()
+        }
+      } else if (isAvailable(requestsIn) && !isClosed(requestsIn)) {
         slots.dequeueFirst(_.isReadyToHandle) match {
           case Some(slot) =>
             slot.handleRequest(grab(requestsIn))
             slots.enqueue(slot)
             pull(requestsIn)
 
-          case None => if (tryEnsureSlots) ensureSlots()
+          case None if firstRequestBuffer.isEmpty =>
+            firstRequestBuffer = Some(grab(requestsIn))
+            if (tryEnsureSlots) ensureSlots()
+
+          case None if firstRequestBuffer.isDefined =>
+            if (tryEnsureSlots) ensureSlots()
         }
+      } else {
+        tryCompleteStageSafely()
       }
 
-    def tryHandleResponseFromSlot(slot: EndpointSlot) =
-      if (isAvailable(responsesOut)) {
-        push(responsesOut, slot.getResponse)
-      }
+    def tryHandleResponseFromSlot(slot: EndpointSlot) = {
+      if (isAvailable(responsesOut)) push(responsesOut, slot.getResponse)
+      tryCompleteStageSafely()
+    }
 
-    def tryHandleResponseFromFailed() =
-      if (isAvailable(responsesOut) && failedResponses.nonEmpty) {
-        push(responsesOut, failedResponses.dequeue())
-      }
+    def tryHandleResponseFromFailed() = {
+      if (isAvailable(responsesOut) && failedResponses.nonEmpty) push(responsesOut, failedResponses.dequeue())
+      tryCompleteStageSafely()
+    }
 
 
     def slotFailed(slot: EndpointSlot, cause: Throwable) = {
@@ -128,6 +149,9 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
       tryHandleResponseFromFailed()
       tryHandleRequest(tryEnsureSlots = true)
     }
+
+    def tryCompleteStageSafely() =
+      if (upstreamFinished && firstRequestBuffer.isEmpty && slots.forall(_.isIdle)) completeStage()
 
     class EndpointSlot(val endpoint: Endpoint, val id: Int) {
       slot =>
@@ -176,6 +200,8 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
 
       def isReadyToGet = slotInlet.isAvailable
 
+      def isIdle = inFlight.isEmpty
+
       def completeSlot(causeOpt: Option[Throwable] = None) = {
         val ex = causeOpt match {
           case Some(cause) => new IllegalStateException(s"Failure to process request to $endpoint at slot $id", cause)
@@ -194,7 +220,10 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
     setHandler(requestsIn, new InHandler {
       override def onPush(): Unit = tryHandleRequest(tryEnsureSlots = true)
 
-      override def onUpstreamFinish(): Unit = completeStage()
+      override def onUpstreamFinish(): Unit = {
+        upstreamFinished = true
+        tryCompleteStageSafely()
+      }
 
       override def onUpstreamFailure(ex: Throwable): Unit =
         failStage(throw new IllegalStateException(s"Requests stream failed", ex))
@@ -203,9 +232,8 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
     setHandler(responsesOut, new OutHandler {
       override def onPull(): Unit =
         if (failedResponses.nonEmpty) {
-          push(responsesOut, failedResponses.dequeue())
+          tryHandleResponseFromFailed()
         } else {
-
           slots
             .dequeueFirst(_.isReadyToGet)
             .foreach(slot => {

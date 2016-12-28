@@ -8,6 +8,7 @@ import akka.stream.scaladsl.{Sink, Source}
 import io.codeheroes.akka.http.lb.core.{EndpointMock, TestLatch}
 import org.scalatest.{FlatSpec, Matchers}
 
+import scala.concurrent.Await
 import scala.concurrent.duration._
 
 class LoadbalancerTests extends FlatSpec with Matchers {
@@ -34,26 +35,38 @@ class LoadbalancerTests extends FlatSpec with Matchers {
     mock.unbind()
   }
 
-  it should "process all events when using flow" in {
-
+  it should "process single request with flow" in {
     val endpoint = Endpoint("localhost", 31000)
     val endpointSource = Source(EndpointUp(endpoint) :: Nil)
     val mock = new EndpointMock(endpoint)
-    val latch = new TestLatch(1)
 
     val loadBalancerFlow = Loadbalancer.flow[Done](endpointSource, LoadbalancerSettings.default)
 
-    Source
-      .single((HttpRequest(), Done))
+    val completed = Source.single((HttpRequest(), Done))
       .via(loadBalancerFlow)
-      .runWith(Sink.ignore)
+      .runWith(Sink.seq)
 
-    Thread sleep 3000
+    Await.result(completed, 3 seconds)
 
-    latch.await(5 seconds) shouldBe true
     mock.processed() shouldBe 1
     mock.unbind()
-
   }
+
+  it should "process list of requests with flow" in {
+    val endpoint = Endpoint("localhost", 31000)
+    val endpointSource = Source(EndpointUp(endpoint) :: Nil)
+    val mock = new EndpointMock(endpoint)
+
+    val loadBalancerFlow = Loadbalancer.flow[Done](endpointSource, LoadbalancerSettings.default)
+
+    val completed = Source(List((HttpRequest(), Done), (HttpRequest(), Done), (HttpRequest(), Done)))
+      .via(loadBalancerFlow)
+      .runWith(Sink.seq)
+
+    Await.result(completed, 3 seconds)
+    mock.processed() shouldBe 3
+    mock.unbind()
+  }
+
 
 }
