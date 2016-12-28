@@ -242,12 +242,9 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
             })
         }
 
-
       override def onDownstreamFinish(): Unit = completeStage()
     })
 
-
     override def onTimer(timerKey: Any): Unit = endpointsFailures.clear()
-
   }
 }

@@ -1,5 +1,5 @@
 name := "akka-http-lb"
-version := "0.1"
+version := "0.2"
 scalaVersion := "2.11.8"
 
 bintrayOrganization := Some("codeheroes")
