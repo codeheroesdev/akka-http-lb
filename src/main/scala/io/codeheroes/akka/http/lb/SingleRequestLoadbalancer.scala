@@ -9,7 +9,7 @@ import akka.stream.{ActorMaterializer, OverflowStrategy, QueueOfferResult}
 import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.util.Try
 
-class SingleRequestLoadbalancer(endpointEventsSouce: Source[EndpointEvent, NotUsed], settings: LoadbalancerSettings)
+class SingleRequestLoadBalancer(endpointEventsSource: Source[EndpointEvent, NotUsed], settings: LoadBalancerSettings)
                                (implicit system: ActorSystem, mat: ActorMaterializer) {
 
   private val inputSource = Source.queue[(HttpRequest, Promise[HttpResponse])](1024, OverflowStrategy.dropNew)
@@ -18,7 +18,7 @@ class SingleRequestLoadbalancer(endpointEventsSouce: Source[EndpointEvent, NotUs
   }
 
   private val inputQueue = inputSource
-    .via(Loadbalancer.flow(endpointEventsSouce, settings))
+    .via(LoadBalancer.flow(endpointEventsSource, settings))
     .toMat(responsesSink)(Keep.left)
     .run()
 

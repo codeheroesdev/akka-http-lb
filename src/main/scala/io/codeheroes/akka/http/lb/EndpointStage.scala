@@ -98,7 +98,6 @@ class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: L
         pull(in)
       }
 
-
     //TODO: Remove it and replace with event driven approach
     def handleError(id: Int, ex: Throwable): Unit = {
       errorCount += 1
