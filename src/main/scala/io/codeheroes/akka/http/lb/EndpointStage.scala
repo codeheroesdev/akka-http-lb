@@ -14,11 +14,11 @@ import scala.util.Try
   */
 
 object EndpointStage {
-  def flow[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: LoadbalancerSettings)(implicit ec: ExecutionContext) =
+  def flow[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: LoadBalancerSettings)(implicit ec: ExecutionContext) =
     Flow.fromGraph(new EndpointStage[T](endpoint, stopSwitch, settings))
 }
 
-class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: LoadbalancerSettings)(implicit ec: ExecutionContext)
+class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: LoadBalancerSettings)(implicit ec: ExecutionContext)
   extends GraphStage[FlowShape[(HttpRequest, T), (Try[HttpResponse], T)]] {
 
   private val in = Inlet[(HttpRequest, T)](s"EndpointStage.$endpoint.in")
@@ -39,7 +39,7 @@ class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: L
       val flow = Flow.fromGraph(GraphDSL.create[FlowShape[(HttpRequest, T), (Try[HttpResponse], T)]]() { implicit b ⇒
         import GraphDSL.Implicits._
 
-        val slots = Vector.tabulate(settings.connectionsPerEndpoint)(id => new LoadbalancerSlot[T](endpoint, id, handleError, slotStopSwitch.future, settings.connectionBuilder(endpoint)))
+        val slots = Vector.tabulate(settings.connectionsPerEndpoint)(id => new LoadBalancerSlot[T](endpoint, id, handleError, slotStopSwitch.future, settings.connectionBuilder(endpoint)))
         val responseMerge = b.add(Merge[(Try[HttpResponse], T)](settings.connectionsPerEndpoint))
         val requestBalance = b.add(Balance[(HttpRequest, T)](settings.connectionsPerEndpoint))
         slots.zipWithIndex.foreach { case (slot, id) => requestBalance.out(id) ~> slot ~> responseMerge.in(id) }

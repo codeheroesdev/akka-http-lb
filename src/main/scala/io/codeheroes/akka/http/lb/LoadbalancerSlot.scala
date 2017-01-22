@@ -13,11 +13,11 @@ import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
 
 
-class LoadbalancerSlot[T](endpoint: Endpoint, slodId: Int, handleError: (Int, Throwable) => Unit, stopSwitch: Future[Unit],
+class LoadBalancerSlot[T](endpoint: Endpoint, slodId: Int, handleError: (Int, Throwable) => Unit, stopSwitch: Future[Unit],
                           connectionFlow: Flow[HttpRequest, HttpResponse, Any])(implicit ec: ExecutionContext) extends GraphStage[FlowShape[(HttpRequest, T), (Try[HttpResponse], T)]] {
 
-  private val in = Inlet[(HttpRequest, T)](s"LoadbalancerSlot.$slodId.in")
-  private val out = Outlet[(Try[HttpResponse], T)](s"LoadbalancerSlot.$slodId.out")
+  private val in = Inlet[(HttpRequest, T)](s"LoadBalancerSlot.$slodId.in")
+  private val out = Outlet[(Try[HttpResponse], T)](s"LoadBalancerSlot.$slodId.out")
 
   override def shape: FlowShape[(HttpRequest, T), (Try[HttpResponse], T)] = FlowShape.of(in, out)
 
@@ -77,10 +77,10 @@ class LoadbalancerSlot[T](endpoint: Endpoint, slodId: Int, handleError: (Int, Th
 
     override def onPush(): Unit = {
       def establishConnectionFlow() = {
-        connectionFlowSource = new SubSourceOutlet[HttpRequest]("LoadbalancerSlot.subSource")
+        connectionFlowSource = new SubSourceOutlet[HttpRequest]("LoadbBalancerSlot.subSource")
         connectionFlowSource.setHandler(connectionOutFlowHandler)
 
-        connectionFlowSink = new SubSinkInlet[HttpResponse]("LoadbalancerSlot.subSink")
+        connectionFlowSink = new SubSinkInlet[HttpResponse]("LoadBalancerSlot.subSink")
         connectionFlowSink.setHandler(connectionInFlowHandler)
 
         isConnected = true

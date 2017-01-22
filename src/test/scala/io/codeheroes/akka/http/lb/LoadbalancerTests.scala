@@ -23,7 +23,7 @@ class LoadbalancerTests extends FlatSpec with Matchers {
     val mock = new EndpointMock(endpoint)
     val latch = new TestLatch(3)
 
-    val loadbalancer = Loadbalancer.singleRequests(endpointSource, LoadbalancerSettings.default)
+    val loadbalancer = LoadBalancer.singleRequests(endpointSource, LoadBalancerSettings.default)
 
     Thread.sleep(1000)
 
@@ -42,7 +42,7 @@ class LoadbalancerTests extends FlatSpec with Matchers {
     val endpointSource = Source(EndpointUp(endpoint) :: Nil)
     val mock = new EndpointMock(endpoint)
 
-    val loadBalancerFlow = Loadbalancer.flow[Done](endpointSource, LoadbalancerSettings.default)
+    val loadBalancerFlow = LoadBalancer.flow[Done](endpointSource, LoadBalancerSettings.default)
 
     val completed = Source.single((HttpRequest(), Done))
       .via(loadBalancerFlow)
@@ -59,7 +59,7 @@ class LoadbalancerTests extends FlatSpec with Matchers {
     val endpointSource = Source(EndpointUp(endpoint) :: Nil)
     val mock = new EndpointMock(endpoint)
 
-    val loadBalancerFlow = Loadbalancer.flow[Done](endpointSource, LoadbalancerSettings.default)
+    val loadBalancerFlow = LoadBalancer.flow[Done](endpointSource, LoadBalancerSettings.default)
 
     val completed = Source(List((HttpRequest(), Done), (HttpRequest(), Done), (HttpRequest(), Done)))
       .via(loadBalancerFlow)

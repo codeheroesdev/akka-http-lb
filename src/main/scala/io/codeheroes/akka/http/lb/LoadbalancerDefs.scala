@@ -22,16 +22,16 @@ case object NoEndpointsAvailableException extends Exception
 case object BufferOverflowException extends Exception
 case object RequestsQueueClosed extends Exception
 
-case class LoadbalancerSettings(
+case class LoadBalancerSettings(
                                  connectionsPerEndpoint: Int,
                                  maxEndpointFailures: Int,
                                  endpointFailuresResetInterval: FiniteDuration,
                                  connectionBuilder: (Endpoint) => Flow[HttpRequest, HttpResponse, NotUsed]
                                )
 
-case object LoadbalancerSettings {
+case object LoadBalancerSettings {
   def default(implicit system: ActorSystem) =
-    LoadbalancerSettings(
+    LoadBalancerSettings(
       connectionsPerEndpoint = 32,
       maxEndpointFailures = 8,
       endpointFailuresResetInterval = 5 seconds,
