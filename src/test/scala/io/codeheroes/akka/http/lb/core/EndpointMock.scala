@@ -12,6 +12,7 @@ import scala.concurrent.Await
 import scala.concurrent.duration._
 
 class EndpointMock(endpoint: Endpoint) {
+
   private implicit val system = ActorSystem()
   private implicit val mat = ActorMaterializer()
   private val _processed = new AtomicInteger(0)
@@ -20,7 +21,6 @@ class EndpointMock(endpoint: Endpoint) {
     _processed.incrementAndGet()
     HttpResponse()
   }
-
 
   private val binding = Await.result(Http().bindAndHandleSync(handler, endpoint.host, endpoint.port), 5 seconds)
 
