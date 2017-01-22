@@ -27,7 +27,6 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
     val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(latch, settings)
 
     endpointsQueue.offer(EndpointUp(Endpoint("localhost", 9090)))
-    Thread.sleep(100)
 
     requestsQueue.offer((HttpRequest(), 1))
     requestsQueue.offer((HttpRequest(), 2))
@@ -111,7 +110,7 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
       val processedRequest = new AtomicInteger(0)
       Flow[HttpRequest].map { _ =>
         val processed = processedRequest.incrementAndGet()
-        if (processed > 1) throw new TimeoutException() else HttpResponse()
+        if (processed == 2 || processed == 3) throw new TimeoutException() else HttpResponse()
       }
     }
 
@@ -139,14 +138,14 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
 
     result(1) shouldBe true
     result(2) shouldBe false
-    result(3) shouldBe true
-    result(4) shouldBe false
+    result(3) shouldBe false
+    result(4) shouldBe true
     result(5) shouldBe true
-    result(6) shouldBe false
+    result(6) shouldBe true
     result(7) shouldBe true
-    result(8) shouldBe false
+    result(8) shouldBe true
     result(9) shouldBe true
-    result(10) shouldBe false
+    result(10) shouldBe true
 
     result should have size 10
 
@@ -188,7 +187,6 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
     latch.await(5 seconds) shouldBe true
     requestsQueue.complete()
     val result = convertIntoStatistics(responsesSeq)
-
 
     result(1) shouldBe true
     result(2) shouldBe true

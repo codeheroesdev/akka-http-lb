@@ -25,6 +25,8 @@ class LoadbalancerTests extends FlatSpec with Matchers {
 
     val loadbalancer = Loadbalancer.singleRequests(endpointSource, LoadbalancerSettings.default)
 
+    Thread.sleep(1000)
+
     loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
     loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
     loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
