@@ -21,7 +21,6 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) with InHandler with OutHandler {
     private val endpoints: mutable.Queue[EndpointWrapper] = mutable.Queue.empty
-    private val failedResponses: mutable.Queue[(Try[HttpResponse], T)] = mutable.Queue.empty
 
     override def preStart(): Unit = {
       pull(endpointsIn)
@@ -48,10 +47,9 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
     override def onPull(): Unit = tryHandleResponse()
 
     private def tryHandleRequest(): Unit =
-      if (endpoints.isEmpty && isAvailable(requestsIn) && !isClosed(requestsIn)) {
+      if (endpoints.isEmpty && isAvailable(requestsIn) && isAvailable(responsesOut) && !isClosed(requestsIn) && !isClosed(responsesOut)) {
         val (_, result) = grab(requestsIn)
-        failedResponses.enqueue((Failure(NoEndpointsAvailableException), result))
-        tryHandleResponse()
+        push(responsesOut, (Failure(NoEndpointsAvailableException), result))
         pull(requestsIn)
       } else if (firstRequest != null) {
         endpoints.find(_.isInAvailable).foreach(endpoint => {
@@ -71,11 +69,7 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
 
     private def tryHandleResponse(): Unit = {
       if (isAvailable(responsesOut) && !isClosed(responsesOut)) {
-        if (failedResponses.nonEmpty) {
-          push(responsesOut, failedResponses.dequeue())
-        } else {
-          endpoints.find(_.isOutAvailable).foreach(endpoint => push(responsesOut, endpoint.grabAndPull()))
-        }
+        endpoints.find(_.isOutAvailable).foreach(endpoint => push(responsesOut, endpoint.grabAndPull()))
       }
       tryFinish()
     }

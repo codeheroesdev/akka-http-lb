@@ -37,13 +37,16 @@ class LoadBalancerSlot[T](endpoint: Endpoint, slodId: Int, handleError: (Int, Th
       }
     }
 
-    def disconnect(error: Option[Throwable] = None) = {
+    def disconnect(cause: Option[Throwable] = None) = {
       connectionFlowSource.complete()
       if (isConnected) {
-        val responseException = error.getOrElse(new IllegalStateException(s"Connection closed to $endpoint in slot $slodId"))
         isConnected = false
-        emitMultiple(out, inflightRequests.iterator().asScala.map { case (request, t) => (Failure(responseException), t) })
-        error.foreach(e => handleError(slodId, e))
+
+        val exception = cause.getOrElse(new RuntimeException(s"Connection closed to $endpoint in slot $slodId"))
+
+        emitMultiple(out, inflightRequests.iterator().asScala.map { case (request, t) => (Failure(exception), t) })
+
+        cause.foreach(e => handleError(slodId, e))
         inflightRequests.clear()
       }
     }

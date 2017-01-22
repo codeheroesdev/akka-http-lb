@@ -11,13 +11,13 @@ import org.scalatest.{FlatSpec, Matchers}
 import scala.concurrent.Await
 import scala.concurrent.duration._
 
-class LoadbalancerTests extends FlatSpec with Matchers {
+class LoadBalancerTests extends FlatSpec with Matchers {
   private implicit val system = ActorSystem()
   private implicit val mat = ActorMaterializer()
   private implicit val ec = system.dispatcher
 
 
-  "Loadbalancer" should "process all request with single endpoint" in {
+  "LoadBalancer" should "process all request with single endpoint" in {
     val endpoint = Endpoint("localhost", 31000)
     val endpointSource = Source(EndpointUp(endpoint) :: Nil)
     val mock = new EndpointMock(endpoint)
