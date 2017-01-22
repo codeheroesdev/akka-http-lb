@@ -1,8 +1,5 @@
 package io.codeheroes.akka.http.lb
 
-import java.util.concurrent.TimeoutException
-
-import akka.Done
 import akka.actor.ActorSystem
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.stream._
@@ -10,37 +7,32 @@ import akka.stream.scaladsl.{Sink, Source}
 import akka.stream.stage._
 
 import scala.collection.mutable
-import scala.util.{Failure, Success, Try}
+import scala.concurrent.Promise
+import scala.util.{Failure, Try}
 
-class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: ActorSystem, mat: ActorMaterializer) extends GraphStage[FanInShape2[EndpointEvent, (HttpRequest, T), (Try[HttpResponse], T)]] {
-
-  val endpointsIn = Inlet[EndpointEvent]("LoadbalancerStage.EndpointEvents.in")
-  val requestsIn = Inlet[(HttpRequest, T)]("LoadbalancerStage.Requests.in")
-  val responsesOut = Outlet[(Try[HttpResponse], T)]("LoadbalancerStage.Responses.out")
-  val log = system.log
+class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: ActorSystem, mat: ActorMaterializer) extends GraphStage[FanInShape2[EndpointEvent, (HttpRequest, T), (Try[HttpResponse], T)]] {
+  val endpointsIn = Inlet[EndpointEvent]("LoadBalancerStage.EndpointEvents.in")
+  val requestsIn = Inlet[(HttpRequest, T)]("LoadBalancerStage.Requests.in")
+  val responsesOut = Outlet[(Try[HttpResponse], T)]("LoadBalancerStage.Responses.out")
+  var firstRequest: (HttpRequest, T) = null
+  var finished = false
 
   override def shape = new FanInShape2(endpointsIn, requestsIn, responsesOut)
 
-  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new TimerGraphStageLogic(shape) {
-    private val endpoints: mutable.Map[Endpoint, Int] = mutable.Map.empty
-    private val endpointsFailures: mutable.Map[Endpoint, Int] = mutable.Map.empty
-    private val slots: mutable.Queue[EndpointSlot] = mutable.Queue.empty
+  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) with InHandler with OutHandler {
+    private val endpoints: mutable.Queue[EndpointWrapper] = mutable.Queue.empty
     private val failedResponses: mutable.Queue[(Try[HttpResponse], T)] = mutable.Queue.empty
-    private var connectionSlotId = 0
-    private var upstreamFinished = false
-    private var firstRequestBuffer: Option[(HttpRequest, T)] = None
 
     override def preStart(): Unit = {
       pull(endpointsIn)
       pull(requestsIn)
-      schedulePeriodically(Done, settings.endpointFailuresResetInterval)
     }
 
-    val endpointsHandler = new InHandler {
+    val endpointsInHandler = new InHandler {
       override def onPush(): Unit = {
         grab(endpointsIn) match {
-          case EndpointUp(endpoint) => handleNewEndpoint(endpoint)
-          case EndpointDown(endpoint) => dropEndpoint(endpoint)
+          case EndpointUp(endpoint) => endpoints.enqueue(new EndpointWrapper(endpoint))
+          case EndpointDown(endpoint) => endpoints.dequeueAll(_.endpoint == endpoint).foreach(_.stop())
         }
         pull(endpointsIn)
       }
@@ -51,200 +43,112 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
         failStage(throw new IllegalStateException(s"EndpointEvents stream failed", ex))
     }
 
-    def nextConnectionSlotId() = {
-      connectionSlotId += 1
-      connectionSlotId
-    }
+    override def onPush(): Unit = tryHandleRequest()
 
-    def handleNewEndpoint(endpoint: Endpoint) =
-      if (!endpoints.contains(endpoint)) {
-        endpoints += (endpoint -> 0)
-        tryHandleRequest(tryEnsureSlots = true)
-      }
+    override def onPull(): Unit = tryHandleResponse()
 
-    def ensureSlots(): Unit = {
-      endpoints
-        .find { case (_, count) => count < settings.connectionsPerEndpoint }
-        .foreach { case (endpoint, currentCount) =>
-          slots.enqueue(new EndpointSlot(endpoint, nextConnectionSlotId()))
-          endpoints(endpoint) = currentCount + 1
-        }
-
-      tryHandleRequest(tryEnsureSlots = false)
-    }
-
-    def tryHandleRequest(tryEnsureSlots: Boolean) =
+    private def tryHandleRequest(): Unit =
       if (endpoints.isEmpty && isAvailable(requestsIn) && !isClosed(requestsIn)) {
         val (_, result) = grab(requestsIn)
         failedResponses.enqueue((Failure(NoEndpointsAvailableException), result))
-        tryHandleResponseFromFailed()
+        tryHandleResponse()
         pull(requestsIn)
-      } else if (firstRequestBuffer.nonEmpty) {
-        slots.dequeueFirst(_.isReadyToHandle) match {
-          case Some(slot) =>
-            slot.handleRequest(firstRequestBuffer.get)
-            slots.enqueue(slot)
-            firstRequestBuffer = None
-
-            if (!isClosed(requestsIn)) pull(requestsIn)
-
-          case None =>
-            if (tryEnsureSlots) ensureSlots()
-        }
-      } else if (isAvailable(requestsIn) && !isClosed(requestsIn)) {
-        slots.dequeueFirst(_.isReadyToHandle) match {
-          case Some(slot) =>
-            slot.handleRequest(grab(requestsIn))
-            slots.enqueue(slot)
-            pull(requestsIn)
-
-          case None if firstRequestBuffer.isEmpty =>
-            firstRequestBuffer = Some(grab(requestsIn))
-            if (tryEnsureSlots) ensureSlots()
-
-          case None if firstRequestBuffer.isDefined =>
-            if (tryEnsureSlots) ensureSlots()
-        }
-      } else {
-        tryCompleteStageSafely()
-      }
-
-    def tryHandleResponseFromSlot(slot: EndpointSlot) = {
-      if (isAvailable(responsesOut)) push(responsesOut, slot.getResponse)
-      tryCompleteStageSafely()
-    }
-
-    def tryHandleResponseFromFailed() = {
-      if (isAvailable(responsesOut) && failedResponses.nonEmpty) push(responsesOut, failedResponses.dequeue())
-      tryCompleteStageSafely()
-    }
-
-
-    def slotFailed(slot: EndpointSlot, cause: Throwable) = {
-      val slotEndpoint = slot.endpoint
-      val totalFailure = endpointsFailures.getOrElse(slotEndpoint, 0) + 1
-      endpointsFailures(slotEndpoint) = totalFailure
-
-      log.warning(s"Slot ${slot.id} to $slotEndpoint failed due to ${cause.getMessage}")
-
-      if (endpointsFailures(slotEndpoint) >= settings.maxEndpointFailures) {
-        log.error(cause, s"Dropping $slotEndpoint, failed $totalFailure times")
-        dropEndpoint(slotEndpoint, Some(cause))
-      } else {
-        removeSlot(slot, Some(cause))
-      }
-    }
-
-    def dropEndpoint(endpoint: Endpoint, cause: Option[Throwable] = None) = {
-      endpoints.remove(endpoint)
-      endpointsFailures.remove(endpoint)
-      slots.dequeueAll(_.endpoint == endpoint).foreach(_.completeSlot(cause))
-      tryHandleResponseFromFailed()
-      tryHandleRequest(tryEnsureSlots = true)
-    }
-
-    def removeSlot(slot: EndpointSlot, cause: Option[Throwable]) = {
-      endpoints(slot.endpoint) = endpoints(slot.endpoint) - 1
-      slots.dequeueAll(_.id == slot.id).foreach(_.completeSlot(cause))
-      tryHandleResponseFromFailed()
-      tryHandleRequest(tryEnsureSlots = true)
-    }
-
-    def tryCompleteStageSafely() =
-      if (upstreamFinished && firstRequestBuffer.isEmpty && slots.forall(_.isIdle)) completeStage()
-
-    class EndpointSlot(val endpoint: Endpoint, val id: Int) {
-      slot =>
-      private val slotInlet = new SubSinkInlet[HttpResponse](s"EndpointSlot.[$endpoint].[$id].in")
-      private val slotOutlet = new SubSourceOutlet[HttpRequest](s"EndpointSlot.[$endpoint].[$id].out")
-
-      private val inFlight = mutable.Queue.empty[T]
-
-      slotInlet.setHandler(new InHandler {
-        override def onPush(): Unit = tryHandleResponseFromSlot(slot)
-
-        override def onUpstreamFinish(): Unit = removeSlot(slot, None)
-
-        override def onUpstreamFailure(ex: Throwable): Unit = ex match {
-          case t: TimeoutException => removeSlot(slot, Some(t))
-          case _ => slotFailed(slot, ex)
-        }
-      })
-
-      slotOutlet.setHandler(new OutHandler {
-        override def onPull(): Unit = tryHandleRequest(tryEnsureSlots = true)
-
-        override def onDownstreamFinish(): Unit = () // Ignored in order to handled upstream failure
-      })
-
-      Source
-        .fromGraph(slotOutlet.source)
-        .via(settings.connectionBuilder(endpoint))
-        .runWith(Sink.fromGraph(slotInlet.sink))(subFusingMaterializer)
-
-      slotInlet.pull()
-
-      def handleRequest(request: (HttpRequest, T)) = {
-        inFlight.enqueue(request._2)
-        slotOutlet.push(request._1)
-      }
-
-      def getResponse = {
-        val response = slotInlet.grab()
-        val element = inFlight.dequeue()
-        slotInlet.pull()
-        (Success(response), element)
-      }
-
-      def isReadyToHandle = slotOutlet.isAvailable
-
-      def isReadyToGet = slotInlet.isAvailable
-
-      def isIdle = inFlight.isEmpty
-
-      def completeSlot(causeOpt: Option[Throwable] = None) = {
-        val ex = causeOpt match {
-          case Some(cause) => new IllegalStateException(s"Failure to process request to $endpoint at slot $id", cause)
-          case None => new IllegalStateException(s"Failure to process request to $endpoint at slot $id")
-        }
-        slotInlet.cancel()
-        slotOutlet.complete()
-
-        inFlight.dequeueAll(_ => true).foreach(t => {
-          failedResponses.enqueue((Failure(ex), t))
+      } else if (firstRequest != null) {
+        endpoints.find(_.isInAvailable).foreach(endpoint => {
+          endpoint.push(firstRequest)
+          firstRequest = null
         })
+      } else if (isAvailable(requestsIn) && !isClosed(requestsIn)) {
+        endpoints.find(_.isInAvailable) match {
+          case Some(endpoint) =>
+            endpoint.push(grab(requestsIn))
+            pull(requestsIn)
+          case None =>
+            firstRequest = grab(requestsIn)
+            pull(requestsIn)
+        }
+      }
+
+    private def tryHandleResponse(): Unit = {
+      if (isAvailable(responsesOut) && !isClosed(responsesOut)) {
+        if (failedResponses.nonEmpty) {
+          push(responsesOut, failedResponses.dequeue())
+        } else {
+          endpoints.find(_.isOutAvailable).foreach(endpoint => push(responsesOut, endpoint.grabAndPull()))
+        }
+      }
+      tryFinish()
+    }
+
+    private def tryFinish() =
+      if (finished && firstRequest == null && endpoints.forall(!_.anyInFlight)) {
+        completeStage()
+      }
+
+    private def removeEndpoint(endpoint: Endpoint) = endpoints.dequeueAll(_.endpoint == endpoint)
+
+
+    class EndpointWrapper(val endpoint: Endpoint) {
+      private val endpointSource = new SubSourceOutlet[(HttpRequest, T)](s"LoadBalancerStage.$endpoint.Source")
+      private val endpointSink = new SubSinkInlet[(Try[HttpResponse], T)](s"LoadBalancerStage.$endpoint.Sink")
+      private val stopSwitch = Promise[Unit]()
+      private val stage = EndpointStage.flow[T](endpoint, stopSwitch.future, settings)(system.dispatcher)
+      private var stopped = false
+      private var inFlight = 0
+
+      private val inHandler = new InHandler {
+        override def onPush(): Unit = tryHandleResponse()
+
+        override def onUpstreamFinish(): Unit = removeEndpoint(endpoint)
+      }
+
+      private val outHandler = new OutHandler {
+        override def onPull(): Unit = tryHandleRequest()
+
+        override def onDownstreamFinish(): Unit = ()
+      }
+
+      endpointSource.setHandler(outHandler)
+      endpointSink.setHandler(inHandler)
+      Source.fromGraph(endpointSource.source).via(stage).runWith(Sink.fromGraph(endpointSink.sink))(subFusingMaterializer)
+      endpointSink.pull()
+
+
+      def push(element: (HttpRequest, T)) = {
+        endpointSource.push(element)
+        inFlight += 1
+      }
+
+      def grabAndPull() = {
+        val element = endpointSink.grab()
+        if (!stopped) endpointSink.pull()
+        inFlight -= 1
+        element
+      }
+
+      def isInAvailable = !stopped && endpointSource.isAvailable
+
+      def isOutAvailable = endpointSink.isAvailable
+
+      def anyInFlight = inFlight > 0
+
+      def stop() = {
+        stopped = true
+        stopSwitch.success(())
       }
     }
 
-    setHandler(endpointsIn, endpointsHandler)
-    setHandler(requestsIn, new InHandler {
-      override def onPush(): Unit = tryHandleRequest(tryEnsureSlots = true)
+    setHandler(endpointsIn, endpointsInHandler)
+    setHandler(requestsIn, this)
+    setHandler(responsesOut, this)
 
-      override def onUpstreamFinish(): Unit = {
-        upstreamFinished = true
-        tryCompleteStageSafely()
-      }
+    override def onUpstreamFinish(): Unit = {
+      finished = true
+      tryFinish()
+    }
 
-      override def onUpstreamFailure(ex: Throwable): Unit =
-        failStage(throw new IllegalStateException(s"Requests stream failed", ex))
-    })
-
-    setHandler(responsesOut, new OutHandler {
-      override def onPull(): Unit =
-        if (failedResponses.nonEmpty) {
-          tryHandleResponseFromFailed()
-        } else {
-          slots
-            .dequeueFirst(_.isReadyToGet)
-            .foreach(slot => {
-              tryHandleResponseFromSlot(slot)
-              slots.enqueue(slot)
-            })
-        }
-
-      override def onDownstreamFinish(): Unit = completeStage()
-    })
-
-    override def onTimer(timerKey: Any): Unit = endpointsFailures.clear()
+    override def onDownstreamFinish(): Unit = completeStage()
   }
+
+
 }
