@@ -6,20 +6,24 @@ import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.stream.scaladsl.Flow
 
-import scala.concurrent.duration.FiniteDuration
-import scala.concurrent.duration._
+import scala.concurrent.duration.{FiniteDuration, _}
 
-final case class Endpoint(host: String, port: Int)
+final case class Endpoint(host: String, port: Int) {
+  override def toString = s"$host:$port"
+}
 
 sealed trait EndpointEvent {
   def endpoint: Endpoint
 }
 
 final case class EndpointUp(endpoint: Endpoint) extends EndpointEvent
+
 final case class EndpointDown(endpoint: Endpoint) extends EndpointEvent
 
 case object NoEndpointsAvailableException extends Exception
+
 case object BufferOverflowException extends Exception
+
 case object RequestsQueueClosed extends Exception
 
 case class LoadBalancerSettings(
