@@ -10,10 +10,10 @@ import scala.collection.mutable
 import scala.concurrent.Promise
 import scala.util.{Failure, Try}
 
-class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: ActorSystem, mat: ActorMaterializer) extends GraphStage[FanInShape2[EndpointEvent, (HttpRequest, T), (Try[HttpResponse], T)]] {
-  val endpointsIn = Inlet[EndpointEvent]("LoadbalancerStage.EndpointEvents.in")
-  val requestsIn = Inlet[(HttpRequest, T)]("LoadbalancerStage.Requests.in")
-  val responsesOut = Outlet[(Try[HttpResponse], T)]("LoadbalancerStage.Responses.out")
+class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: ActorSystem, mat: ActorMaterializer) extends GraphStage[FanInShape2[EndpointEvent, (HttpRequest, T), (Try[HttpResponse], T)]] {
+  val endpointsIn = Inlet[EndpointEvent]("LoadBalancerStage.EndpointEvents.in")
+  val requestsIn = Inlet[(HttpRequest, T)]("LoadBalancerStage.Requests.in")
+  val responsesOut = Outlet[(Try[HttpResponse], T)]("LoadBalancerStage.Responses.out")
   var firstRequest: (HttpRequest, T) = null
   var finished = false
 
@@ -81,18 +81,20 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
     }
 
     private def tryFinish() =
-      if (finished && endpoints.forall(e => e.isInAvailable && !e.isOutAvailable)) {
+      if (finished && firstRequest == null && endpoints.forall(!_.anyInFlight)) {
         completeStage()
       }
 
     private def removeEndpoint(endpoint: Endpoint) = endpoints.dequeueAll(_.endpoint == endpoint)
 
+
     class EndpointWrapper(val endpoint: Endpoint) {
-      private val endpointSource = new SubSourceOutlet[(HttpRequest, T)](s"LoadbalancerStage.$endpoint.Source")
-      private val endpointSink = new SubSinkInlet[(Try[HttpResponse], T)](s"LoadbalancerStage.$endpoint.Sink")
+      private val endpointSource = new SubSourceOutlet[(HttpRequest, T)](s"LoadBalancerStage.$endpoint.Source")
+      private val endpointSink = new SubSinkInlet[(Try[HttpResponse], T)](s"LoadBalancerStage.$endpoint.Sink")
       private val stopSwitch = Promise[Unit]()
       private val stage = EndpointStage.flow[T](endpoint, stopSwitch.future, settings)(system.dispatcher)
       private var stopped = false
+      private var inFlight = 0
 
       private val inHandler = new InHandler {
         override def onPush(): Unit = tryHandleResponse()
@@ -114,17 +116,21 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
 
       def push(element: (HttpRequest, T)) = {
         endpointSource.push(element)
+        inFlight += 1
       }
 
       def grabAndPull() = {
         val element = endpointSink.grab()
         if (!stopped) endpointSink.pull()
+        inFlight -= 1
         element
       }
 
       def isInAvailable = !stopped && endpointSource.isAvailable
 
       def isOutAvailable = endpointSink.isAvailable
+
+      def anyInFlight = inFlight > 0
 
       def stop() = {
         stopped = true
