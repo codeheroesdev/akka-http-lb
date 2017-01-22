@@ -11,17 +11,15 @@ import scala.concurrent.Promise
 import scala.util.{Failure, Try}
 
 class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: ActorSystem, mat: ActorMaterializer) extends GraphStage[FanInShape2[EndpointEvent, (HttpRequest, T), (Try[HttpResponse], T)]] {
-
   val endpointsIn = Inlet[EndpointEvent]("LoadbalancerStage.EndpointEvents.in")
   val requestsIn = Inlet[(HttpRequest, T)]("LoadbalancerStage.Requests.in")
   val responsesOut = Outlet[(Try[HttpResponse], T)]("LoadbalancerStage.Responses.out")
   var firstRequest: (HttpRequest, T) = null
   var finished = false
-  val log = system.log
 
   override def shape = new FanInShape2(endpointsIn, requestsIn, responsesOut)
 
-  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new TimerGraphStageLogic(shape) with InHandler with OutHandler {
+  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) with InHandler with OutHandler {
     private val endpoints: mutable.Queue[EndpointWrapper] = mutable.Queue.empty
     private val failedResponses: mutable.Queue[(Try[HttpResponse], T)] = mutable.Queue.empty
 
@@ -143,11 +141,7 @@ class LoadbalancerStage[T](settings: LoadbalancerSettings)(implicit system: Acto
       tryFinish()
     }
 
-    override def onUpstreamFailure(ex: Throwable): Unit = ()
-
     override def onDownstreamFinish(): Unit = completeStage()
-
-
   }
 
 
