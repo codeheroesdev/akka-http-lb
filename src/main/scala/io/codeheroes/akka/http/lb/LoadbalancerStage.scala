@@ -35,7 +35,7 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
             if (!endpoints.exists(_.endpoint == endpoint)) {
               endpoints.enqueue(new EndpointWrapper(endpoint))
             }
-          case EndpointDown(endpoint) => endpoints.dequeueAll(_.endpoint == endpoint).foreach(_.stop())
+          case EndpointDown(endpoint) => endpoints.dequeueAll(_.endpoint == endpoint).foreach(_.disconnect())
         }
         pull(endpointsIn)
       }
@@ -51,10 +51,16 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
     override def onPull(): Unit = tryHandleResponse()
 
     private def tryHandleRequest(): Unit =
-      if (endpoints.isEmpty && isAvailable(requestsIn) && isAvailable(responsesOut) && !isClosed(requestsIn) && !isClosed(responsesOut)) {
-        val (_, result) = grab(requestsIn)
-        push(responsesOut, (Failure(NoEndpointsAvailableException), result))
-        pull(requestsIn)
+      if (endpoints.isEmpty && isAvailable(responsesOut) && !isClosed(requestsIn) && !isClosed(responsesOut)) {
+        if (firstRequest != null) {
+          push(responsesOut, (Failure(NoEndpointsAvailableException), firstRequest._2))
+          firstRequest = null
+        } else if (isAvailable(requestsIn)) {
+          val (_, result) = grab(requestsIn)
+          push(responsesOut, (Failure(NoEndpointsAvailableException), result))
+          pull(requestsIn)
+        }
+
       } else if (firstRequest != null) {
         endpoints.find(_.isInAvailable).foreach(endpoint => {
           endpoint.push(firstRequest)
@@ -72,8 +78,10 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
       }
 
     private def tryHandleResponse(): Unit = {
-      if (isAvailable(responsesOut) && !isClosed(responsesOut)) {
+      if (endpoints.nonEmpty && isAvailable(responsesOut) && !isClosed(responsesOut)) {
         endpoints.find(_.isOutAvailable).foreach(endpoint => push(responsesOut, endpoint.grabAndPull()))
+      } else {
+        tryHandleRequest()
       }
       tryFinish()
     }
@@ -83,14 +91,16 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
         completeStage()
       }
 
-    private def removeEndpoint(endpoint: Endpoint) = endpoints.dequeueAll(_.endpoint == endpoint)
-
+    private def removeEndpoint(endpoint: Endpoint) = {
+      endpoints.dequeueAll(_.endpoint == endpoint)
+      tryHandleRequest()
+    }
 
     class EndpointWrapper(val endpoint: Endpoint) {
       private val endpointSource = new SubSourceOutlet[(HttpRequest, T)](s"LoadBalancerStage.$endpoint.Source")
       private val endpointSink = new SubSinkInlet[(Try[HttpResponse], T)](s"LoadBalancerStage.$endpoint.Sink")
       private val stopSwitch = Promise[Unit]()
-      private val stage = EndpointStage.flow[T](endpoint, stopSwitch.future, settings)(mat)
+      private val stage = EndpointStage.flow[T](endpoint, stopSwitch.future, stop, settings)(mat)
       private var stopped = false
       private var inFlight = 0
 
@@ -106,6 +116,11 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
         override def onDownstreamFinish(): Unit = ()
       }
 
+      private def stop(ex: Throwable): Unit = {
+        stopped = true
+        stopSwitch.failure(ex)
+      }
+
       endpointSource.setHandler(outHandler)
       endpointSink.setHandler(inHandler)
       Source.fromGraph(endpointSource.source).via(stage).runWith(Sink.fromGraph(endpointSink.sink))(subFusingMaterializer)
@@ -119,7 +134,7 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
 
       def grabAndPull() = {
         val element = endpointSink.grab()
-        if (!stopped) endpointSink.pull()
+        endpointSink.pull()
         inFlight -= 1
         element
       }
@@ -130,10 +145,8 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
 
       def anyInFlight = inFlight > 0
 
-      def stop() = {
-        stopped = true
-        stopSwitch.success(())
-      }
+      def disconnect() = stop(new IllegalStateException(s"Endpoint $endpoint down"))
+
     }
 
     setHandler(endpointsIn, endpointsInHandler)

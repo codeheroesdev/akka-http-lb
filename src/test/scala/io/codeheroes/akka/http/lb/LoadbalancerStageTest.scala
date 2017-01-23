@@ -266,13 +266,13 @@ class LoadBalancerStageTest extends FlatSpec with Matchers {
   }
 
   it should "drop endpoint if too many failures occurs within reset interval" in {
-    val latch = new TestLatch(10)
+    val latch = new TestLatch(15)
     val processedRequest = new AtomicInteger(0)
 
     val connectionBuilder = (endpoint: Endpoint) => {
       Flow[HttpRequest].map { _ =>
         val processed = processedRequest.incrementAndGet()
-        if (Set(6, 7, 8).contains(processed)) throw new IllegalArgumentException("Failed") else HttpResponse()
+        if (Set(6, 7, 8).contains(processed)) throw new IllegalStateException("Failed") else HttpResponse()
       }
     }
     val settings = LoadBalancerSettings(2, 3, 5 seconds, connectionBuilder)
@@ -292,9 +292,13 @@ class LoadBalancerStageTest extends FlatSpec with Matchers {
     requestsQueue.offer((HttpRequest(), 8))
     requestsQueue.offer((HttpRequest(), 9))
     requestsQueue.offer((HttpRequest(), 10))
+    requestsQueue.offer((HttpRequest(), 11))
+    requestsQueue.offer((HttpRequest(), 12))
+    requestsQueue.offer((HttpRequest(), 13))
+    requestsQueue.offer((HttpRequest(), 14))
+    requestsQueue.offer((HttpRequest(), 15))
 
-
-    latch.await(10 seconds) shouldBe true
+    latch.await(5 seconds) shouldBe true
     requestsQueue.complete()
     val result = convertIntoStatistics(responsesSeq)
 
@@ -307,10 +311,15 @@ class LoadBalancerStageTest extends FlatSpec with Matchers {
     result(6) shouldBe false
     result(7) shouldBe false
     result(8) shouldBe false
-    result(9) shouldBe false
+    result(9) shouldBe true
     result(10) shouldBe false
+    result(11) shouldBe false
+    result(12) shouldBe false
+    result(13) shouldBe false
+    result(14) shouldBe false
+    result(15) shouldBe false
 
-    result should have size 10
+    result should have size 15
   }
 
   it should "process all request even for small amount of connections" in {

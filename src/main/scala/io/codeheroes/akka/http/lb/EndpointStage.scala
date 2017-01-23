@@ -7,14 +7,14 @@ import akka.stream.scaladsl._
 import akka.stream.stage._
 
 import scala.concurrent.{Future, Promise}
-import scala.util.Try
+import scala.util.{Failure, Success, Try}
 
 object EndpointStage {
-  def flow[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: LoadBalancerSettings)(implicit mat: ActorMaterializer) =
-    Flow.fromGraph(new EndpointStage[T](endpoint, stopSwitch, settings))
+  def flow[T](endpoint: Endpoint, stopSwitch: Future[Unit], onStop: (Throwable) => Unit, settings: LoadBalancerSettings)(implicit mat: ActorMaterializer) =
+    Flow.fromGraph(new EndpointStage[T](endpoint, stopSwitch, onStop, settings))
 }
 
-class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: LoadBalancerSettings)(implicit mat: ActorMaterializer)
+class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], onStop: (Throwable) => Unit, settings: LoadBalancerSettings)(implicit mat: ActorMaterializer)
   extends GraphStage[FlowShape[(HttpRequest, T), (Try[HttpResponse], T)]] {
 
   private val in = Inlet[(HttpRequest, T)](s"EndpointStage.$endpoint.in")
@@ -46,16 +46,24 @@ class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: L
       })
 
 
-      val stopCallback = getAsyncCallback[Unit]((_) => {
-        stopped = true
-        slotStopSwitch.success(())
-        tryComplete()
-      })
+      val stopCallback = getAsyncCallback[Option[Throwable]] {
+        case Some(ex) =>
+          stopped = true
+          slotStopSwitch.failure(ex)
+          tryComplete()
+        case None =>
+          stopped = true
+          slotStopSwitch.success(())
+          tryComplete()
+      }
 
       Source.fromGraph(connectionFlowSource.source).via(flow).runWith(Sink.fromGraph(connectionFlowSink.sink))(subFusingMaterializer)
 
       connectionFlowSink.pull()
-      stopSwitch.foreach(stopCallback.invoke)
+      stopSwitch.onComplete {
+        case Success(_) => stopCallback.invoke(None)
+        case Failure(ex) => stopCallback.invoke(Some(ex))
+      }
       schedulePeriodically(Done, settings.endpointFailuresResetInterval)
     }
 
@@ -106,12 +114,12 @@ class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: L
     def handleError(id: Int, ex: Throwable): Unit = {
       errorCount += 1
       if (errorCount >= settings.maxEndpointFailures) {
-        stopped = true
-        slotStopSwitch.failure(new IllegalStateException(s"Too many failures for endpoint $endpoint"))
+        onStop(new IllegalStateException(s"Too many failures for endpoint $endpoint"))
       }
     }
 
     def tryComplete(or: () => Unit = () => ()) = if (stopped && inFlight <= 0) completeStage() else or()
+
 
     override def onTimer(timerKey: Any): Unit = errorCount = 0
 
