@@ -11,19 +11,21 @@ import org.scalatest.{FlatSpec, Matchers}
 import scala.concurrent.Await
 import scala.concurrent.duration._
 
-class LoadbalancerTests extends FlatSpec with Matchers {
+class LoadBalancerTests extends FlatSpec with Matchers {
   private implicit val system = ActorSystem()
   private implicit val mat = ActorMaterializer()
   private implicit val ec = system.dispatcher
 
 
-  "Loadbalancer" should "process all request with single endpoint" in {
+  "LoadBalancer" should "process all request with single endpoint" in {
     val endpoint = Endpoint("localhost", 31000)
     val endpointSource = Source(EndpointUp(endpoint) :: Nil)
     val mock = new EndpointMock(endpoint)
     val latch = new TestLatch(3)
 
-    val loadbalancer = Loadbalancer.singleRequests(endpointSource, LoadbalancerSettings.default)
+    val loadbalancer = LoadBalancer.singleRequests(endpointSource, LoadBalancerSettings.default)
+
+    Thread.sleep(1000)
 
     loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
     loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
@@ -40,7 +42,7 @@ class LoadbalancerTests extends FlatSpec with Matchers {
     val endpointSource = Source(EndpointUp(endpoint) :: Nil)
     val mock = new EndpointMock(endpoint)
 
-    val loadBalancerFlow = Loadbalancer.flow[Done](endpointSource, LoadbalancerSettings.default)
+    val loadBalancerFlow = LoadBalancer.flow[Done](endpointSource, LoadBalancerSettings.default)
 
     val completed = Source.single((HttpRequest(), Done))
       .via(loadBalancerFlow)
@@ -57,7 +59,7 @@ class LoadbalancerTests extends FlatSpec with Matchers {
     val endpointSource = Source(EndpointUp(endpoint) :: Nil)
     val mock = new EndpointMock(endpoint)
 
-    val loadBalancerFlow = Loadbalancer.flow[Done](endpointSource, LoadbalancerSettings.default)
+    val loadBalancerFlow = LoadBalancer.flow[Done](endpointSource, LoadBalancerSettings.default)
 
     val completed = Source(List((HttpRequest(), Done), (HttpRequest(), Done), (HttpRequest(), Done)))
       .via(loadBalancerFlow)

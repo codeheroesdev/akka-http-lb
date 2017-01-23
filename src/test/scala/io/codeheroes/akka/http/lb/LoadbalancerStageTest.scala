@@ -15,19 +15,18 @@ import scala.concurrent.duration._
 import scala.concurrent.{Await, Future}
 import scala.util.{Failure, Success, Try}
 
-class LoadbalancerStageTest extends FlatSpec with Matchers {
+class LoadBalancerStageTest extends FlatSpec with Matchers {
   implicit val system = ActorSystem()
   implicit val mat = ActorMaterializer()
   implicit val ec = system.dispatcher
 
-  "LoadbalancerStage" should "adapt to endpoint failure" in {
+  "LoadBalancerStage" should "adapt to endpoint failure" in {
     val latch = new TestLatch(10)
-    val settings = LoadbalancerSettings(2, 10, 5 seconds, createConnectionBuilder(5))
+    val settings = LoadBalancerSettings(2, 10, 5 seconds, createConnectionBuilder(5))
 
     val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(latch, settings)
 
     endpointsQueue.offer(EndpointUp(Endpoint("localhost", 9090)))
-    Thread.sleep(100)
 
     requestsQueue.offer((HttpRequest(), 1))
     requestsQueue.offer((HttpRequest(), 2))
@@ -59,9 +58,9 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
     result should have size 10
   }
 
-  it should "adopt to endpoint down events" in {
+  it should "adopt to endpoint up -> down" in {
     val responsesLatch = new TestLatch(5)
-    val settings = LoadbalancerSettings(2, 10, 5 seconds, createConnectionBuilder(10))
+    val settings = LoadBalancerSettings(2, 10, 5 seconds, createConnectionBuilder(10))
 
     val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(responsesLatch, settings)
 
@@ -105,17 +104,80 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
 
   }
 
+  it should "adopt to endpoint up -> down -> up" in {
+    val responsesLatch = new TestLatch(5)
+    val settings = LoadBalancerSettings(2, 10, 5 seconds, createConnectionBuilder(10))
+
+    val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(responsesLatch, settings)
+
+    endpointsQueue.offer(EndpointUp(Endpoint("localhost", 9090)))
+    Thread.sleep(100)
+
+    requestsQueue.offer((HttpRequest(), 1))
+    requestsQueue.offer((HttpRequest(), 2))
+    requestsQueue.offer((HttpRequest(), 3))
+    requestsQueue.offer((HttpRequest(), 4))
+    requestsQueue.offer((HttpRequest(), 5))
+
+    responsesLatch.await(5 seconds) shouldBe true
+    responsesLatch.reset(5)
+
+    endpointsQueue.offer(EndpointDown(Endpoint("localhost", 9090)))
+    Thread.sleep(100)
+
+    requestsQueue.offer((HttpRequest(), 6))
+    requestsQueue.offer((HttpRequest(), 7))
+    requestsQueue.offer((HttpRequest(), 8))
+    requestsQueue.offer((HttpRequest(), 9))
+    requestsQueue.offer((HttpRequest(), 10))
+
+    responsesLatch.await(5 seconds) shouldBe true
+    responsesLatch.reset(5)
+
+    endpointsQueue.offer(EndpointUp(Endpoint("localhost", 9090)))
+    Thread.sleep(100)
+
+    requestsQueue.offer((HttpRequest(), 11))
+    requestsQueue.offer((HttpRequest(), 12))
+    requestsQueue.offer((HttpRequest(), 13))
+    requestsQueue.offer((HttpRequest(), 14))
+    requestsQueue.offer((HttpRequest(), 15))
+
+    responsesLatch.await(5 seconds) shouldBe true
+    requestsQueue.complete()
+    val result = convertIntoStatistics(responsesSeq)
+
+    result(1) shouldBe true
+    result(2) shouldBe true
+    result(3) shouldBe true
+    result(4) shouldBe true
+    result(5) shouldBe true
+    result(6) shouldBe false
+    result(7) shouldBe false
+    result(8) shouldBe false
+    result(9) shouldBe false
+    result(10) shouldBe false
+    result(11) shouldBe true
+    result(12) shouldBe true
+    result(13) shouldBe true
+    result(14) shouldBe true
+    result(15) shouldBe true
+
+    result should have size 15
+
+  }
+
   it should "not drop endpoint after Timeout exception" in {
     val responsesLatch = new TestLatch(10)
     val connectionBuilder = (endpoint: Endpoint) => {
       val processedRequest = new AtomicInteger(0)
       Flow[HttpRequest].map { _ =>
         val processed = processedRequest.incrementAndGet()
-        if (processed > 1) throw new TimeoutException() else HttpResponse()
+        if (processed == 2 || processed == 3) throw new TimeoutException() else HttpResponse()
       }
     }
 
-    val settings = LoadbalancerSettings(1, 0, 5 seconds, connectionBuilder)
+    val settings = LoadBalancerSettings(1, 0, 5 seconds, connectionBuilder)
 
     val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(responsesLatch, settings)
 
@@ -139,14 +201,14 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
 
     result(1) shouldBe true
     result(2) shouldBe false
-    result(3) shouldBe true
-    result(4) shouldBe false
+    result(3) shouldBe false
+    result(4) shouldBe true
     result(5) shouldBe true
-    result(6) shouldBe false
+    result(6) shouldBe true
     result(7) shouldBe true
-    result(8) shouldBe false
+    result(8) shouldBe true
     result(9) shouldBe true
-    result(10) shouldBe false
+    result(10) shouldBe true
 
     result should have size 10
 
@@ -163,7 +225,7 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
         if (Set(6, 7, 8).contains(processed)) throw new IllegalArgumentException("Failed") else HttpResponse()
       }
     }
-    val settings = LoadbalancerSettings(2, 3, 250 millis, connectionBuilder)
+    val settings = LoadBalancerSettings(2, 3, 250 millis, connectionBuilder)
 
     val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(latch, settings)
 
@@ -189,7 +251,6 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
     requestsQueue.complete()
     val result = convertIntoStatistics(responsesSeq)
 
-
     result(1) shouldBe true
     result(2) shouldBe true
     result(3) shouldBe true
@@ -214,7 +275,7 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
         if (Set(6, 7, 8).contains(processed)) throw new IllegalArgumentException("Failed") else HttpResponse()
       }
     }
-    val settings = LoadbalancerSettings(2, 3, 5 seconds, connectionBuilder)
+    val settings = LoadBalancerSettings(2, 3, 5 seconds, connectionBuilder)
 
     val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(latch, settings)
 
@@ -253,7 +314,7 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
   }
 
   /*Helper methods*/
-  private def buildLoadbalancer(latch: TestLatch, settings: LoadbalancerSettings) = {
+  private def buildLoadbalancer(latch: TestLatch, settings: LoadBalancerSettings) = {
     val endpoints = Source.queue[EndpointEvent](1024, OverflowStrategy.backpressure)
     val requests = Source.queue[(HttpRequest, Int)](1024, OverflowStrategy.backpressure)
     val responses = Flow[(Try[HttpResponse], Int)].map(result => {
@@ -264,7 +325,7 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
     RunnableGraph.fromGraph(GraphDSL.create(endpoints, requests, responses)((_, _, _)) { implicit builder =>
       (endpointsIn, requestsIn, responsesOut) =>
         import GraphDSL.Implicits._
-        val lb = builder.add(new LoadbalancerStage[Int](settings))
+        val lb = builder.add(new LoadBalancerStage[Int](settings))
         endpointsIn ~> lb.in0
         requestsIn ~> lb.in1
         lb.out ~> responsesOut.in
@@ -283,6 +344,6 @@ class LoadbalancerStageTest extends FlatSpec with Matchers {
   private def convertIntoStatistics(responses: Future[Seq[(Try[HttpResponse], Int)]]) =
     Await.result(responses, 5 seconds).map {
       case (Success(_), i) => i -> true
-      case (Failure(_), i) => i -> false
+      case (Failure(ex), i) => i -> false
     }.toMap
 }

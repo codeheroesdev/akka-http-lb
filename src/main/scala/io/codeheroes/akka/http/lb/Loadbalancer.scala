@@ -6,20 +6,20 @@ import akka.stream._
 import akka.stream.scaladsl._
 
 
-object Loadbalancer {
-  def flow[T](endpointEventsSource: Source[EndpointEvent, NotUsed], settings: LoadbalancerSettings)
+object LoadBalancer {
+  def flow[T](endpointEventsSource: Source[EndpointEvent, NotUsed], settings: LoadBalancerSettings)
              (implicit system: ActorSystem, mat: ActorMaterializer) =
 
     Flow.fromGraph(GraphDSL.create(endpointEventsSource) { implicit builder =>
       eventsInlet =>
         import GraphDSL.Implicits._
-        val lb = builder.add(new LoadbalancerStage[T](settings))
+        val lb = builder.add(new LoadBalancerStage[T](settings))
         eventsInlet ~> lb.in0
         FlowShape(lb.in1, lb.out)
     })
 
 
-  def singleRequests(endpointEventsSource: Source[EndpointEvent, NotUsed], settings: LoadbalancerSettings)
+  def singleRequests(endpointEventsSource: Source[EndpointEvent, NotUsed], settings: LoadBalancerSettings)
                     (implicit system: ActorSystem, mat: ActorMaterializer) =
-    new SingleRequestLoadbalancer(endpointEventsSource, settings)
+    new SingleRequestLoadBalancer(endpointEventsSource, settings)
 }
