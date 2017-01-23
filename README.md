@@ -3,10 +3,24 @@ akka-http-lb
 
 [![Build Status](https://travis-ci.org/codeheroesdev/akka-http-lb.svg?branch=master)](https://travis-ci.org/codeheroesdev/akka-http-lb)
 
-## Disclaimer
+Disclaimer
+----------
 This Akka HTTP loadbalancer is now under development and should be treated as alpha software.
 
-##Example of LoadBalancer - flow
+Dependencies
+------------
+Add the following lines to your `build.sbt` file:
+
+    resolvers += Resolver.bintrayRepo("codeheroes", "maven")
+
+    libraryDependencies += "akka-http-lb" %% "akka-http-lb" % "0.3"
+
+This version of `akka-http-lb` is not intend to be used on production.
+
+
+Examples of LoadBalancer
+------------------------
+### flow
 ```scala
   //Source of endpoint events
   val endpointEvents = Source(EndpointUp(Endpoint("hostA", 8080)) :: EndpointUp(Endpoint("hostB", 8080)) :: Nil)
@@ -23,7 +37,7 @@ This Akka HTTP loadbalancer is now under development and should be treated as al
   requestsSource.via(loadBalancerFlow).to(responsesSink).run()
 ```
 
-##Example of LoadBalancer - single request API
+### single request API
 ```scala
   //Source of endpoint events
   val endpointEvents = Source(EndpointUp(Endpoint("hostA", 8080)) :: EndpointUp(Endpoint("hostB", 8080)) :: Nil)
