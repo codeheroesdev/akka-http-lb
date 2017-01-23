@@ -6,7 +6,7 @@ akka-http-lb
 ## Disclaimer
 This Akka HTTP loadbalancer is now under development and should be treated as alpha software.
 
-##Example of LoadBalancer flow
+##Example of LoadBalancer - flow
 ```scala
   //Source of endpoint events
   val endpointEvents = Source(EndpointUp(Endpoint("hostA", 8080)) :: EndpointUp(Endpoint("hostB", 8080)) :: Nil)
@@ -21,4 +21,20 @@ This Akka HTTP loadbalancer is now under development and should be treated as al
   val responsesSink: Sink[(Try[HttpResponse], Int), NotUsed] = _
   
   requestsSource.via(loadBalancerFlow).to(responsesSink).run()
+```
+
+##Example of LoadBalancer - single request API
+```scala
+  //Source of endpoint events
+  val endpointEvents = Source(EndpointUp(Endpoint("hostA", 8080)) :: EndpointUp(Endpoint("hostB", 8080)) :: Nil)
+  val settings = LoadBalancerSettings.default
+
+  //Create the client which will distribute requests between hosts
+  val loadBalancedClient = LoadBalancer.singleRequests(endpointEvents, settings)
+  
+  //Execute HttpRequest via client
+  loadBalancedClient.request(HttpRequest(uri = "/")).onComplete{
+    case Success(response) => //do something with response
+    case Failure(ex) => //do something with failure
+  }
 ```
