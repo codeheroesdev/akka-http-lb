@@ -25,8 +25,6 @@ class LoadBalancerTests extends FlatSpec with Matchers {
 
     val loadbalancer = LoadBalancer.singleRequests(endpointSource, LoadBalancerSettings.default)
 
-    Thread.sleep(1000)
-
     loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
     loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
     loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
@@ -44,8 +42,6 @@ class LoadBalancerTests extends FlatSpec with Matchers {
     val latch = new TestLatch(30)
 
     val loadbalancer = LoadBalancer.singleRequests(endpointSource, LoadBalancerSettings.default.copy(connectionsPerEndpoint = 8))
-
-    Thread.sleep(1000)
 
     loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
     loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
@@ -101,7 +97,7 @@ class LoadBalancerTests extends FlatSpec with Matchers {
       .via(loadBalancerFlow)
       .runWith(Sink.seq)
 
-    Await.result(completed, 3 seconds)
+    Await.result(completed, 3 seconds) should have size 1
 
     mock.processed() shouldBe 1
     mock.unbind()
@@ -118,9 +114,30 @@ class LoadBalancerTests extends FlatSpec with Matchers {
       .via(loadBalancerFlow)
       .runWith(Sink.seq)
 
-    Await.result(completed, 3 seconds)
+    Await.result(completed, 3 seconds) should have size 3
     mock.processed() shouldBe 3
     mock.unbind()
+  }
+
+  it should "distribute requests between endpoints" in {
+    val endpoint1 = Endpoint("localhost", 31001)
+    val endpoint2 = Endpoint("localhost", 31002)
+    val endpoint3 = Endpoint("localhost", 31003)
+
+    val mock1 = new EndpointMock(endpoint1)
+    val mock2 = new EndpointMock(endpoint2)
+    val mock3 = new EndpointMock(endpoint3)
+
+    val endpointSource = Source(EndpointUp(endpoint1):: EndpointUp(endpoint2):: EndpointUp(endpoint3) :: Nil)
+    val loadBalancerFlow = LoadBalancer.flow[Int](endpointSource, LoadBalancerSettings.default.copy(connectionsPerEndpoint = 4))
+    val requests = (1 to 30).map(i => (HttpRequest(), i))
+
+    val completed = Source(requests).via(loadBalancerFlow).runWith(Sink.seq)
+
+    Await.result(completed, 5 seconds).size should be >= 28
+    mock1.processed() should be >= 9
+    mock2.processed() should be >= 9
+    mock3.processed() should be >= 9
   }
 
 
