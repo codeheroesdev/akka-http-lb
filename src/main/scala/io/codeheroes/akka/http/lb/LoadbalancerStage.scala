@@ -10,7 +10,8 @@ import scala.collection.mutable
 import scala.concurrent.Promise
 import scala.util.{Failure, Try}
 
-class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: ActorSystem, mat: ActorMaterializer) extends GraphStage[FanInShape2[EndpointEvent, (HttpRequest, T), (Try[HttpResponse], T)]] {
+class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: ActorSystem, mat: ActorMaterializer)
+  extends GraphStage[FanInShape2[EndpointEvent, (HttpRequest, T), (Try[HttpResponse], T)]] {
   val endpointsIn = Inlet[EndpointEvent]("LoadBalancerStage.EndpointEvents.in")
   val requestsIn = Inlet[(HttpRequest, T)]("LoadBalancerStage.Requests.in")
   val responsesOut = Outlet[(Try[HttpResponse], T)]("LoadBalancerStage.Responses.out")
@@ -30,7 +31,10 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
     val endpointsInHandler = new InHandler {
       override def onPush(): Unit = {
         grab(endpointsIn) match {
-          case EndpointUp(endpoint) => endpoints.enqueue(new EndpointWrapper(endpoint))
+          case EndpointUp(endpoint) =>
+            if (!endpoints.exists(_.endpoint == endpoint)) {
+              endpoints.enqueue(new EndpointWrapper(endpoint))
+            }
           case EndpointDown(endpoint) => endpoints.dequeueAll(_.endpoint == endpoint).foreach(_.stop())
         }
         pull(endpointsIn)
@@ -86,7 +90,7 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
       private val endpointSource = new SubSourceOutlet[(HttpRequest, T)](s"LoadBalancerStage.$endpoint.Source")
       private val endpointSink = new SubSinkInlet[(Try[HttpResponse], T)](s"LoadBalancerStage.$endpoint.Sink")
       private val stopSwitch = Promise[Unit]()
-      private val stage = EndpointStage.flow[T](endpoint, stopSwitch.future, settings)(system.dispatcher)
+      private val stage = EndpointStage.flow[T](endpoint, stopSwitch.future, settings)(mat)
       private var stopped = false
       private var inFlight = 0
 

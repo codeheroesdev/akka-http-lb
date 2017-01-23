@@ -6,18 +6,20 @@ import java.util.concurrent.TimeoutException
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.stream._
 import akka.stream.scaladsl.{Flow, Sink, Source}
-import akka.stream.stage.{GraphStage, GraphStageLogic, InHandler, OutHandler}
+import akka.stream.stage._
 
 import scala.collection.JavaConverters._
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.Future
+import scala.concurrent.duration._
 import scala.util.{Failure, Success, Try}
 
-
 class LoadBalancerSlot[T](endpoint: Endpoint, slodId: Int, handleError: (Int, Throwable) => Unit, stopSwitch: Future[Unit],
-                          connectionFlow: Flow[HttpRequest, HttpResponse, Any])(implicit ec: ExecutionContext) extends GraphStage[FlowShape[(HttpRequest, T), (Try[HttpResponse], T)]] {
+                          connectionFlow: Flow[HttpRequest, HttpResponse, Any])(implicit mat: ActorMaterializer) extends GraphStage[FlowShape[(HttpRequest, T), (Try[HttpResponse], T)]] {
 
   private val in = Inlet[(HttpRequest, T)](s"LoadBalancerSlot.$slodId.in")
   private val out = Outlet[(Try[HttpResponse], T)](s"LoadBalancerSlot.$slodId.out")
+
+  import mat.executionContext
 
   override def shape: FlowShape[(HttpRequest, T), (Try[HttpResponse], T)] = FlowShape.of(in, out)
 
@@ -29,12 +31,16 @@ class LoadBalancerSlot[T](endpoint: Endpoint, slodId: Int, handleError: (Int, Th
     private var connectionFlowSource: SubSourceOutlet[HttpRequest] = _
     private var connectionFlowSink: SubSinkInlet[HttpResponse] = _
 
+    private var strictResponseCallback: AsyncCallback[(Try[HttpResponse], T)] = _
+
     override def preStart(): Unit = {
       val stopCallback = getAsyncCallback[Option[Throwable]](disconnect)
       stopSwitch.onComplete {
         case Success(_) => stopCallback.invoke(None)
         case Failure(ex) => stopCallback.invoke(Some(ex))
       }
+
+      strictResponseCallback = getAsyncCallback[(Try[HttpResponse], T)] { case (result, t) => push(out, (result, t)) }
     }
 
     def disconnect(cause: Option[Throwable] = None) = {
@@ -67,7 +73,12 @@ class LoadBalancerSlot[T](endpoint: Endpoint, slodId: Int, handleError: (Int, Th
       override def onPush(): Unit = {
         val response = connectionFlowSink.grab()
         val (_, t) = inflightRequests.pop
-        push(out, (Success(response), t))
+
+        //TODO: This should be fixed with watch completion approach
+        response.entity.toStrict(15 seconds).onComplete {
+          case Success(entity) => strictResponseCallback.invoke((Success(response withEntity entity), t))
+          case Failure(ex) => strictResponseCallback.invoke(Failure(ex), t)
+        }
       }
 
       override def onUpstreamFinish(): Unit = disconnect()
@@ -93,13 +104,13 @@ class LoadBalancerSlot[T](endpoint: Endpoint, slodId: Int, handleError: (Int, Th
       }
 
       val (request, t) = grab(in)
+
       if (isConnected) {
         inflightRequests.add((request, t))
         connectionFlowSource.push(request)
       } else {
         firstRequest = (request, t)
         establishConnectionFlow()
-
       }
     }
 

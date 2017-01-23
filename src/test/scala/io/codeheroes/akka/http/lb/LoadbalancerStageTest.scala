@@ -294,7 +294,7 @@ class LoadBalancerStageTest extends FlatSpec with Matchers {
     requestsQueue.offer((HttpRequest(), 10))
 
 
-    latch.await(5 seconds) shouldBe true
+    latch.await(10 seconds) shouldBe true
     requestsQueue.complete()
     val result = convertIntoStatistics(responsesSeq)
 
@@ -311,6 +311,68 @@ class LoadBalancerStageTest extends FlatSpec with Matchers {
     result(10) shouldBe false
 
     result should have size 10
+  }
+
+  it should "process all request even for small amount of connections" in {
+    val latch = new TestLatch(20)
+    val settings = LoadBalancerSettings(5, 10, 5 seconds, createConnectionBuilder(100))
+
+    val (endpointsQueue, requestsQueue, responsesSeq) = buildLoadbalancer(latch, settings)
+
+    endpointsQueue.offer(EndpointUp(Endpoint("localhost", 9090)))
+    Thread sleep 100
+
+    requestsQueue.offer((HttpRequest(), 1))
+    requestsQueue.offer((HttpRequest(), 2))
+    requestsQueue.offer((HttpRequest(), 3))
+    requestsQueue.offer((HttpRequest(), 4))
+    requestsQueue.offer((HttpRequest(), 5))
+    requestsQueue.offer((HttpRequest(), 6))
+    requestsQueue.offer((HttpRequest(), 7))
+    requestsQueue.offer((HttpRequest(), 8))
+    requestsQueue.offer((HttpRequest(), 9))
+    requestsQueue.offer((HttpRequest(), 10))
+
+    Thread sleep 500
+
+    requestsQueue.offer((HttpRequest(), 11))
+    requestsQueue.offer((HttpRequest(), 12))
+    requestsQueue.offer((HttpRequest(), 13))
+    requestsQueue.offer((HttpRequest(), 14))
+    requestsQueue.offer((HttpRequest(), 15))
+    requestsQueue.offer((HttpRequest(), 16))
+    requestsQueue.offer((HttpRequest(), 17))
+    requestsQueue.offer((HttpRequest(), 18))
+    requestsQueue.offer((HttpRequest(), 19))
+    requestsQueue.offer((HttpRequest(), 20))
+
+    latch.await(5 seconds) shouldBe true
+    requestsQueue.complete()
+    val result = convertIntoStatistics(responsesSeq)
+
+    result(1) shouldBe true
+    result(2) shouldBe true
+    result(3) shouldBe true
+    result(4) shouldBe true
+    result(5) shouldBe true
+    result(6) shouldBe true
+    result(7) shouldBe true
+    result(8) shouldBe true
+    result(9) shouldBe true
+    result(10) shouldBe true
+    result(11) shouldBe true
+    result(12) shouldBe true
+    result(13) shouldBe true
+    result(14) shouldBe true
+    result(15) shouldBe true
+    result(16) shouldBe true
+    result(17) shouldBe true
+    result(18) shouldBe true
+    result(19) shouldBe true
+    result(20) shouldBe true
+
+
+    result should have size 20
   }
 
   /*Helper methods*/

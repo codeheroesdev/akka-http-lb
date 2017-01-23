@@ -2,27 +2,25 @@ package io.codeheroes.akka.http.lb
 
 import akka.Done
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
+import akka.stream._
 import akka.stream.scaladsl._
 import akka.stream.stage._
-import akka.stream.{Attributes, FlowShape, Inlet, Outlet}
 
-import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.concurrent.{Future, Promise}
 import scala.util.Try
 
-/**
-  * @author mciolek
-  */
-
 object EndpointStage {
-  def flow[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: LoadBalancerSettings)(implicit ec: ExecutionContext) =
+  def flow[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: LoadBalancerSettings)(implicit mat: ActorMaterializer) =
     Flow.fromGraph(new EndpointStage[T](endpoint, stopSwitch, settings))
 }
 
-class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: LoadBalancerSettings)(implicit ec: ExecutionContext)
+class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: LoadBalancerSettings)(implicit mat: ActorMaterializer)
   extends GraphStage[FlowShape[(HttpRequest, T), (Try[HttpResponse], T)]] {
 
   private val in = Inlet[(HttpRequest, T)](s"EndpointStage.$endpoint.in")
   private val out = Outlet[(Try[HttpResponse], T)](s"EndpointStage.$endpoint.out")
+
+  import mat.executionContext
 
   override def shape: FlowShape[(HttpRequest, T), (Try[HttpResponse], T)] = FlowShape.of(in, out)
 
@@ -30,7 +28,7 @@ class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: L
     val connectionFlowSource = new SubSourceOutlet[(HttpRequest, T)]("EndpointStage.subSource")
     val connectionFlowSink = new SubSinkInlet[(Try[HttpResponse], T)]("EndpointStage.subSink")
     var errorCount = 0
-    var inFlightRequest = 0
+    var inFlight = 0
     var stopped = false
     val slotStopSwitch = Promise[Unit]()
 
@@ -66,36 +64,42 @@ class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: L
       override def onPull(): Unit =
         if (isAvailable(in) && !stopped) {
           connectionFlowSource.push(grab(in))
-          inFlightRequest += 1
+          inFlight += 1
           pull(in)
-        } else if (!hasBeenPulled(in)) {
-          pull(in)
+        } else {
+          if (!hasBeenPulled(in)) {
+            pull(in)
+          }
         }
     })
 
     connectionFlowSink.setHandler(new InHandler {
       override def onPush(): Unit = if (isAvailable(out)) {
         push(out, connectionFlowSink.grab())
-        inFlightRequest -= 1
+        inFlight -= 1
         tryComplete(() => connectionFlowSink.pull())
+      } else {
       }
     })
 
     override def onPull(): Unit =
       if (connectionFlowSink.isAvailable) {
         push(out, connectionFlowSink.grab())
-        inFlightRequest -= 1
+        inFlight -= 1
         tryComplete(() => connectionFlowSink.pull())
-      } else if (!connectionFlowSink.hasBeenPulled) {
-        connectionFlowSink.pull()
+      } else {
+        if (!connectionFlowSink.hasBeenPulled) {
+          connectionFlowSink.pull()
+        }
       }
 
 
     override def onPush(): Unit =
       if (connectionFlowSource.isAvailable && !stopped) {
         connectionFlowSource.push(grab(in))
-        inFlightRequest += 1
+        inFlight += 1
         pull(in)
+      } else {
       }
 
     //TODO: Remove it and replace with event driven approach
@@ -107,7 +111,7 @@ class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], settings: L
       }
     }
 
-    def tryComplete(or: () => Unit = () => ()) = if (stopped && inFlightRequest <= 0) completeStage() else or()
+    def tryComplete(or: () => Unit = () => ()) = if (stopped && inFlight <= 0) completeStage() else or()
 
     override def onTimer(timerKey: Any): Unit = errorCount = 0
 

@@ -37,6 +37,59 @@ class LoadBalancerTests extends FlatSpec with Matchers {
     mock.unbind()
   }
 
+  it should "process many single requests" in {
+    val endpoint = Endpoint("localhost", 31000)
+    val endpointSource = Source(EndpointUp(endpoint) :: Nil)
+    val mock = new EndpointMock(endpoint)
+    val latch = new TestLatch(30)
+
+    val loadbalancer = LoadBalancer.singleRequests(endpointSource, LoadBalancerSettings.default.copy(connectionsPerEndpoint = 8))
+
+    Thread.sleep(1000)
+
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+
+    Thread.sleep(250)
+
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+
+    Thread.sleep(250)
+
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+    loadbalancer.request(HttpRequest()).onSuccess { case _ => latch.countDown() }
+
+    latch.await(10 seconds) shouldBe true
+
+    mock.processed() shouldBe 30
+    mock.unbind()
+  }
+
   it should "process single request with flow" in {
     val endpoint = Endpoint("localhost", 31000)
     val endpointSource = Source(EndpointUp(endpoint) :: Nil)
