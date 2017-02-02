@@ -121,7 +121,7 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
         override def onDownstreamFinish(): Unit = ()
       }
 
-      private def stop(ex: Throwable): Unit = {
+      private def stop(ex: Throwable): Unit = if (!stopped) {
         stopped = true
         stopSwitch.failure(ex)
       }
