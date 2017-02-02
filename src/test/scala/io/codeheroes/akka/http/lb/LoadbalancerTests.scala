@@ -8,7 +8,7 @@ import akka.stream.scaladsl.{Sink, Source}
 import io.codeheroes.akka.http.lb.core.{EndpointMock, TestLatch}
 import org.scalatest.{FlatSpec, Matchers}
 
-import scala.concurrent.Await
+import scala.concurrent.{Future, Await}
 import scala.concurrent.duration._
 
 class LoadBalancerTests extends FlatSpec with Matchers {
@@ -119,6 +119,24 @@ class LoadBalancerTests extends FlatSpec with Matchers {
     mock.unbind()
   }
 
+  it should "process list of requests with flow between async stages" in {
+    val endpoint = Endpoint("localhost", 31000)
+    val endpointSource = Source(EndpointUp(endpoint) :: Nil)
+    val mock = new EndpointMock(endpoint)
+
+    val loadBalancerFlow = LoadBalancer.flow[Done](endpointSource, LoadBalancerSettings.default)
+
+    val completed = Source(List((HttpRequest(), Done), (HttpRequest(), Done), (HttpRequest(), Done)))
+      .mapAsync(8) { case data => Future(data) }
+      .via(loadBalancerFlow)
+      .mapAsync(8) { case data => Future(data) }
+      .runWith(Sink.seq)
+
+    Await.result(completed, 3 seconds) should have size 3
+    mock.processed() shouldBe 3
+    mock.unbind()
+  }
+
   it should "distribute requests between endpoints" in {
     val endpoint1 = Endpoint("localhost", 31001)
     val endpoint2 = Endpoint("localhost", 31002)
@@ -128,7 +146,7 @@ class LoadBalancerTests extends FlatSpec with Matchers {
     val mock2 = new EndpointMock(endpoint2)
     val mock3 = new EndpointMock(endpoint3)
 
-    val endpointSource = Source(EndpointUp(endpoint1):: EndpointUp(endpoint2):: EndpointUp(endpoint3) :: Nil)
+    val endpointSource = Source(EndpointUp(endpoint1) :: EndpointUp(endpoint2) :: EndpointUp(endpoint3) :: Nil)
     val loadBalancerFlow = LoadBalancer.flow[Int](endpointSource, LoadBalancerSettings.default.copy(connectionsPerEndpoint = 4))
     val requests = (1 to 30).map(i => (HttpRequest(), i))
 

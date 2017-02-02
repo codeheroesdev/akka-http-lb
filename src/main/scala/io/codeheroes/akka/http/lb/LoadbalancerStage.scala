@@ -107,7 +107,6 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
       private val stopSwitch = Promise[Unit]()
       private val stage = EndpointStage.flow[T](endpoint, stopSwitch.future, stop, settings)(mat)
       private var stopped = false
-      private var inFlight = 0
 
       private val inHandler = new InHandler {
         override def onPush(): Unit = tryHandleResponse()
@@ -134,13 +133,11 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
 
       def push(element: (HttpRequest, T)) = {
         endpointSource.push(element)
-        inFlight += 1
       }
 
       def grabAndPull() = {
         val element = endpointSink.grab()
         endpointSink.pull()
-        inFlight -= 1
         element
       }
 
