@@ -103,7 +103,23 @@ class LoadBalancerTests extends FlatSpec with Matchers {
     mock.unbind()
   }
 
-  it should "process list of requests with flow" in {
+  it should "process list of 2 requests with flow" in {
+    val endpoint = Endpoint("localhost", 31000)
+    val endpointSource = Source(EndpointUp(endpoint) :: Nil)
+    val mock = new EndpointMock(endpoint)
+
+    val loadBalancerFlow = LoadBalancer.flow[Done](endpointSource, LoadBalancerSettings.default)
+
+    val completed = Source(List((HttpRequest(), Done), (HttpRequest(), Done)))
+      .via(loadBalancerFlow)
+      .runWith(Sink.seq)
+
+    Await.result(completed, 3 seconds) should have size 2
+    mock.processed() shouldBe 2
+    mock.unbind()
+  }
+
+  it should "process list of 3 requests with flow" in {
     val endpoint = Endpoint("localhost", 31000)
     val endpointSource = Source(EndpointUp(endpoint) :: Nil)
     val mock = new EndpointMock(endpoint)
@@ -127,9 +143,9 @@ class LoadBalancerTests extends FlatSpec with Matchers {
     val loadBalancerFlow = LoadBalancer.flow[Done](endpointSource, LoadBalancerSettings.default)
 
     val completed = Source(List((HttpRequest(), Done), (HttpRequest(), Done), (HttpRequest(), Done)))
-      .mapAsync(8) { case data => Future(data) }
+      .mapAsyncUnordered(8) { case data => Future(data) }
       .via(loadBalancerFlow)
-      .mapAsync(8) { case data => Future(data) }
+      .mapAsyncUnordered(8) { case data => Future(data) }
       .runWith(Sink.seq)
 
     Await.result(completed, 3 seconds) should have size 3
