@@ -15,29 +15,28 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
   val endpointsIn = Inlet[EndpointEvent]("LoadBalancerStage.EndpointEvents.in")
   val requestsIn = Inlet[(HttpRequest, T)]("LoadBalancerStage.Requests.in")
   val responsesOut = Outlet[(Try[HttpResponse], T)]("LoadBalancerStage.Responses.out")
-  var firstRequest: (HttpRequest, T) = null
-  var finished = false
 
   override def shape = new FanInShape2(endpointsIn, requestsIn, responsesOut)
 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) with InHandler with OutHandler {
     private val endpoints: mutable.Queue[EndpointWrapper] = mutable.Queue.empty
     private var inFlight = 0
+    private var finished = false
 
-    override def preStart(): Unit = {
-      pull(endpointsIn)
-      pull(requestsIn)
-    }
+    override def preStart(): Unit = pull(endpointsIn)
+
+    override def onPush(): Unit = tryHandleRequest()
+
+    override def onPull(): Unit = tryHandleResponse()
 
     val endpointsInHandler = new InHandler {
       override def onPush(): Unit = tryHandleEndpoint()
+
       override def onUpstreamFinish(): Unit = ()
+
       override def onUpstreamFailure(ex: Throwable): Unit =
         failStage(throw new IllegalStateException(s"EndpointEvents stream failed", ex))
     }
-
-    override def onPush(): Unit = tryHandleRequest()
-    override def onPull(): Unit = tryHandleResponse()
 
     private def tryHandleEndpoint() = {
       grab(endpointsIn) match {
@@ -51,32 +50,17 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
     }
 
     private def tryHandleRequest(): Unit =
-      if (endpoints.isEmpty && isAvailable(responsesOut) && !isClosed(requestsIn) && !isClosed(responsesOut)) {
-        if (firstRequest != null) {
-          push(responsesOut, (Failure(NoEndpointsAvailableException), firstRequest._2))
-          firstRequest = null
-          inFlight -= 1
-        } else if (isAvailable(requestsIn)) {
-          val (_, result) = grab(requestsIn)
-          push(responsesOut, (Failure(NoEndpointsAvailableException), result))
-          pull(requestsIn)
-        }
-      } else if (firstRequest != null) {
-        endpoints.find(_.isInAvailable).foreach(endpoint => {
-          endpoint.push(firstRequest)
-          firstRequest = null
-        })
+      if (endpoints.isEmpty && isAvailable(responsesOut) && isAvailable(requestsIn) && !isClosed(requestsIn) && !isClosed(responsesOut)) {
+        val (_, result) = grab(requestsIn)
+        push(responsesOut, (Failure(NoEndpointsAvailableException), result))
+        pull(requestsIn)
       } else if (isAvailable(requestsIn) && !isClosed(requestsIn)) {
-        endpoints.find(_.isInAvailable) match {
-          case Some(endpoint) =>
-            endpoint.push(grab(requestsIn))
-            pull(requestsIn)
-            inFlight += 1
-          case None =>
-            firstRequest = grab(requestsIn)
-            pull(requestsIn)
-            inFlight += 1
-        }
+        endpoints.find(_.isInAvailable).foreach(endpoint => {
+          endpoint.push(grab(requestsIn))
+          inFlight += 1
+        })
+      } else if (!hasBeenPulled(requestsIn) && !isClosed(requestsIn)) {
+        pull(requestsIn)
       }
 
     private def tryHandleResponse(): Unit = {
@@ -85,20 +69,15 @@ class LoadBalancerStage[T](settings: LoadBalancerSettings)(implicit system: Acto
           push(responsesOut, endpoint.grabAndPull())
           inFlight -= 1
         })
-      } else {
-        tryHandleRequest()
       }
       tryFinish()
     }
 
-    private def tryFinish() =
-      if (finished && inFlight <= 0) {
-        completeStage()
-      }
+    private def tryFinish() = if (finished && inFlight <= 0) completeStage()
 
     private def removeEndpoint(endpoint: Endpoint) = {
       endpoints.dequeueAll(_.endpoint == endpoint)
-      tryHandleRequest()
+      if (endpoints.isEmpty) tryHandleRequest()
     }
 
     class EndpointWrapper(val endpoint: Endpoint) {
