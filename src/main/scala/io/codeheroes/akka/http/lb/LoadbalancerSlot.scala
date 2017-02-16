@@ -18,6 +18,7 @@ class LoadBalancerSlot[T](endpoint: Endpoint, slodId: Int, handleError: (Int, Th
 
   private val in = Inlet[(HttpRequest, T)](s"LoadBalancerSlot.$slodId.in")
   private val out = Outlet[(Try[HttpResponse], T)](s"LoadBalancerSlot.$slodId.out")
+  private val resetConnectionMessage = "The connection closed with error: Connection reset by peer"
 
   import mat.executionContext
 
@@ -85,6 +86,7 @@ class LoadBalancerSlot[T](endpoint: Endpoint, slodId: Int, handleError: (Int, Th
 
       override def onUpstreamFailure(ex: Throwable): Unit = ex match {
         case t: TimeoutException => disconnect()
+        case t: StreamTcpException if t.getMessage == resetConnectionMessage => disconnect()
         case _ => disconnect(Some(ex))
       }
     }

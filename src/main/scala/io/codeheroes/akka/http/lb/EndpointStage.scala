@@ -19,6 +19,7 @@ class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], onStop: (Th
 
   private val in = Inlet[(HttpRequest, T)](s"EndpointStage.$endpoint.in")
   private val out = Outlet[(Try[HttpResponse], T)](s"EndpointStage.$endpoint.out")
+  private val logger = mat.system.log
 
   import mat.executionContext
 
@@ -112,6 +113,8 @@ class EndpointStage[T](endpoint: Endpoint, stopSwitch: Future[Unit], onStop: (Th
 
     //TODO: Remove it and replace with event driven approach
     def handleError(id: Int, ex: Throwable): Unit = {
+      logger.error(ex, s"Received endpoint failure from slot $id")
+
       errorCount += 1
       if (errorCount >= settings.maxEndpointFailures) {
         onStop(new IllegalStateException(s"Too many failures for endpoint $endpoint"))
