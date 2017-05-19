@@ -13,7 +13,7 @@ Add the following lines to your `build.sbt` file:
 
     resolvers += Resolver.bintrayRepo("codeheroes", "maven")
 
-    libraryDependencies += "akka-http-lb" %% "akka-http-lb" % "0.3"
+    libraryDependencies += "akka-http-lb" %% "akka-http-lb" % "0.5.0"
 
 This version of `akka-http-lb` is not intend to be used on production.
 
