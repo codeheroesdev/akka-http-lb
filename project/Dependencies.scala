@@ -6,7 +6,7 @@ object Dependencies {
     "com.typesafe.akka" %% "akka-actor" % akkaVersion,
     "com.typesafe.akka" %% "akka-stream" % akkaVersion,
     "com.typesafe.akka" %% "akka-http-core" % akkaHttpVersion,
-    "org.scalatest" %% "scalatest" % "2.2.6" % "test"
+    "org.scalatest" %% "scalatest" % "3.0.3" % "test"
   )
 
   val additionalResolvers = Seq(
